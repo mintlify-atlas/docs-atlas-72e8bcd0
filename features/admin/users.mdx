@@ -1,0 +1,145 @@
+---
+title: "User Management and Role Assignment in SansiStore"
+sidebarTitle: "Users"
+description: "Admins manage user accounts, assign roles, enable or disable accounts, and review access logs for all SansiStore platform users."
+---
+
+User management in SansiStore is an admin-only operation. The `UserManagement` component, accessible at `/admin/users/usuarios`, provides a searchable table of all registered accounts with inline controls for editing roles, toggling account status, and registering new users. Every account is stored in the `users` Firestore collection using the Firebase Auth UID as the document ID.
+
+## User Document Fields
+
+Each document in the `users` collection contains the following fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `uid` | `string` | Firebase Auth UID — also the Firestore document ID |
+| `email` | `string` | Institutional email (must match `@umss.edu` domain in production) |
+| `displayName` | `string` | Full name shown throughout the platform |
+| `phoneNumber` | `string` | 8-digit Bolivian mobile number starting with 6 or 7 |
+| `ci` | `string` | Cédula de identidad — numeric, unique across the platform |
+| `internalPhone` | `string?` | Optional internal extension number |
+| `institutionalId` | `string?` | Optional institutional identifier |
+| `roles` | `UserRole[]` | Array of assigned roles (see role table below) |
+| `isActive` | `boolean` | `false` disables the account; the user cannot log in |
+| `createdBy` | `string?` | UID of the admin who created the account |
+| `createdAt` | `Date?` | Server timestamp of account creation |
+
+<Note>
+  Accounts created by an admin are provisioned with a securely generated temporary password. The admin must share this credential with the new user out-of-band. Users may then change it on first login.
+</Note>
+
+## Roles and Portal Mapping
+
+SansiStore uses an array-based role model. A user may hold multiple roles simultaneously. Roles are stored both in the Firestore `users` document and as Firebase Auth custom claims (`{ roles: string[] }`) so that server-side API routes can verify them without an extra Firestore read.
+
+| Role | Label | Default Portal |
+|------|-------|----------------|
+| `admin` | Administrador | `/admin` |
+| `vendedor` | Vendedor | `/seller/created-orders` |
+| `mensajero` | Mensajero | `/courier` |
+| `operador_inv` | Operador inv. | `/inventory` |
+| `comprador` | Comprador | (buyer-side storefront) |
+
+<Warning>
+  If all roles are removed from a user's account the platform has no default portal to redirect them to and they will land at `/` (the public home page) with no functional access. Always ensure at least one role is assigned before saving.
+</Warning>
+
+## The `isActive` Flag
+
+Setting `isActive` to `false` in both Firestore and Firebase Auth (`disabled: true`) prevents the user from signing in. The `UserEditModal` exposes a toggle for this field. Disabling an account does not delete it — the history and logs associated with the UID are preserved.
+
+## `/api/users` Endpoint
+
+All user CRUD operations are proxied through the server-side `/api/users` endpoint, which requires a valid admin Bearer token.
+
+### `GET /api/users`
+
+Returns all users sorted alphabetically by `displayName`. Supports optional query parameters:
+
+| Parameter | Description |
+|-----------|-------------|
+| `search` | Case-insensitive substring filter on `displayName` or `email` |
+| `role` | Filter to users with a specific role (must be a valid `UserRole`) |
+
+**Response shape:**
+
+```json
+{
+  "users": [
+    {
+      "uid": "abc123",
+      "email": "jdoe@umss.edu",
+      "displayName": "Jane Doe",
+      "phoneNumber": "71234567",
+      "ci": "12345678",
+      "roles": ["vendedor"],
+      "isActive": true,
+      "createdBy": "adminUid",
+      "createdAt": "2024-03-01T10:00:00.000Z"
+    }
+  ]
+}
+```
+
+### `POST /api/users`
+
+Creates a new Firebase Auth user and the corresponding Firestore document. The API generates a temporary password returned in the response under `temporaryPassword`. Returns `201` on success.
+
+**Required body fields:** `displayName`, `email`, `phoneNumber`, `ci`, `roles`  
+**Optional body fields:** `internalPhone`
+
+### `PATCH /api/users`
+
+Updates an existing user. Accepts `uid` (required) plus any subset of `displayName`, `email`, `phoneNumber`, `roles`, `isActive`. Updating `roles` also refreshes the Firebase Auth custom claims.
+
+## Email Validation
+
+The `/api/users` endpoint enforces UMSS institutional email addresses on both creation and update. The domain check uses the pattern `/(?:^|\.)umss\.edu(?:\.|$)/`. Any email not matching a `umss.edu` domain is rejected with a `400` error.
+
+<Tip>
+  In development, the `ENABLE_DEV_ADMIN_BYPASS=true` environment variable (with `PUBLIC_APP_ENV` not equal to `production`) allows API calls without a Bearer token, using a fixed `DEV_ADMIN_UID`. Never enable this in production.
+</Tip>
+
+## Access Logs (`accessLogs` Collection)
+
+Every login and logout event is written to the `accessLogs` Firestore collection by `registrarAcceso` in `accessLogService.ts`. The `AccessLogPanel` component lets admins search and filter this audit trail.
+
+### Access Log Document Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `logId` | `string` | Firestore document ID |
+| `uid` | `string` | User UID |
+| `displayName` | `string` | Display name at time of event |
+| `email` | `string` | Email at time of event |
+| `roles` | `string[]` | Roles held at time of event |
+| `action` | `'LOGIN' \| 'LOGOUT'` | Event type |
+| `status` | `'ACTIVO' \| 'CERRADO'` | `ACTIVO` on LOGIN; `CERRADO` on LOGOUT |
+| `timestamp` | `Date` | Server-side Firestore timestamp |
+
+### Filtering Access Logs
+
+`getAccessLogs` accepts a `AccessLogFilter` object:
+
+```typescript
+interface AccessLogFilter {
+  startDate?: Date;   // Start of date range
+  endDate?: Date;     // End of date range (filtered in memory)
+  role?: string;      // Filter by a specific role
+  action?: 'LOGIN' | 'LOGOUT' | 'ALL';
+}
+```
+
+The query applies a `startDate` filter directly in Firestore (single `where` clause to avoid composite index requirements) and applies `endDate`, `action`, and `role` filters in memory. Results are sorted by `timestamp` descending and capped at 500 documents per call.
+
+## Registering a New User
+
+The `RegisterUserModal` component provides a form that calls `POST /api/users`. The workflow is:
+
+1. Admin fills in `displayName`, `email` (UMSS domain), `phoneNumber`, `ci`, and selects one or more roles.
+2. The API validates uniqueness of `email` in both Firestore and Firebase Auth, and uniqueness of `ci` in Firestore.
+3. On success, a temporary password is returned and the new user appears immediately in the `UserTable`.
+
+<Note>
+  In production, only `@umss.edu` email addresses are accepted for both user creation and Google SSO registration. Other domains are blocked at the API validation layer.
+</Note>

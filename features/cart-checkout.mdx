@@ -1,0 +1,278 @@
+---
+title: "Cart and Checkout Flow in SansiStore"
+sidebarTitle: "Cart & Checkout"
+description: "SansiStore's cart stores items per user in Firestore, supporting quantity changes and multi-item checkout with delivery location selection."
+---
+
+The SansiStore shopping cart provides a persistent, real-time purchasing flow that works for both guest and authenticated buyers. Guest items are stored in `localStorage`; upon sign-in they are automatically synced to Firestore. The cart page at `/carrito` lists all items, shows live price and stock changes, allows quantity edits and item removal, and guides the buyer through a multi-step checkout ending in order creation.
+
+## Checkout Flow
+
+<Steps>
+  <Step title="View Cart">
+    Navigate to `/carrito`. The `<CartView>` component loads `itemsWithProducts` from the `CartContext`, which reads the authenticated user's `users/{uid}/cartItems` subcollection (or `localStorage` for guests) and enriches each item with live product and inventory data.
+  </Step>
+  <Step title="Review Items">
+    Each `<CartItemRow>` shows the product image, name, unit price (with a strikethrough of the original price-at-add if the price changed), stock-aware quantity controls (+/−), and a remove button. The payment summary sidebar animates the running total with `<AnimatedAmount>`.
+  </Step>
+  <Step title="Confirm Order (Login Gate)">
+    Clicking **Confirmar pedido** checks authentication. Unauthenticated users see `<LoginModal>` prompting them to sign in before continuing. Only users with the `comprador` role can proceed.
+  </Step>
+  <Step title="Select Delivery Location">
+    `<LocationSelectorModal>` subscribes to `users/{uid}/locations` in real time via `subscribeToUserLocations()`. The buyer selects a saved address; if none exist, a link to `/ubicaciones` is shown to add one. The default location is pre-selected.
+  </Step>
+  <Step title="Confirm Payment">
+    `<PaymentConfirmModal>` shows the selected location, the final total, and asks the buyer to confirm. The payment method is initialized as `cash_on_delivery` at order creation and updated later by the seller.
+  </Step>
+  <Step title="Order Created">
+    `createOrder()` runs a Firestore **batch write** that atomically creates the `orders` document, all `orderItems` sub-documents, reserves stock in `inventory`, and creates a `payments` document. The cart is then cleared and `<OrderSuccessModal>` confirms the order.
+  </Step>
+</Steps>
+
+---
+
+## Cart State Management
+
+Cart state is managed with **Nanostores** (`src/features/cart/store/cartStore.ts`). Two atoms drive the cart badge in the navbar:
+
+```ts
+// src/features/cart/store/cartStore.ts
+import { atom } from 'nanostores';
+
+export const cartTotalUnits = atom<number>(0);  // total quantity across all items
+export const cartAnimating = atom<boolean>(false); // triggers cart icon bounce
+
+export function initCartStore() {
+  if (typeof window === 'undefined') return;
+  const items = getLocalCart();
+  cartTotalUnits.set(getTotalUnits(items));
+}
+
+export function notifyCartUpdate(newTotal: number) {
+  cartTotalUnits.set(newTotal);
+  cartAnimating.set(true);
+  setTimeout(() => cartAnimating.set(false), 800);
+}
+```
+
+`CartContext` (`src/features/cart/components/CartContext.tsx`) provides the full cart state and actions to all React components below the `<CartProvider>` boundary:
+
+```ts
+const { addToCart, removeItem, updateQuantity, setQuantity,
+        clearCart, items, itemsWithProducts, loading } = useCartContext();
+```
+
+<Tip>
+  `<CartProvider>` wraps both `<FeaturedProducts>` and `<CartView>`. On product pages it enables the quick-add button on every `<ProductCard>` and the **Agregar al carrito** button on the detail page.
+</Tip>
+
+---
+
+## Firestore Cart Structure
+
+Cart items for authenticated users live in the `users/{uid}/cartItems` subcollection. Each document ID equals the `productId`.
+
+```ts
+// src/features/cart/types.ts
+interface CartItem {
+  cartItemId: string;   // same as productId
+  userId: string;
+  productId: string;
+  quantity: number;
+  updatedAt: Date;      // serverTimestamp() on every write
+}
+```
+
+### Key Firestore Operations
+
+<CodeGroup>
+```ts Upsert Item
+// src/features/cart/services/cartFirestore.ts
+await upsertCartItem(uid, productId, quantity, priceAtAdd);
+// uses setDoc(..., { merge: true }) — safe to call on new or existing items
+```
+
+```ts Sync on Login
+// replaces all Firestore cart items with the local cart contents in one batch
+await syncCartToFirestore(uid, localItems);
+```
+
+```ts Clear Cart
+// deletes every document in users/{uid}/cartItems via writeBatch
+await clearCartFirestore(uid);
+```
+</CodeGroup>
+
+When a user signs in, the local `localStorage` cart is merged with any existing Firestore cart and the result is written back to Firestore atomically.
+
+---
+
+## Real-Time Price and Stock Checks
+
+`CartView` uses `getUserCartItems()` which re-fetches the live `products` and `inventory` documents for each cart item on every load. It computes:
+
+```ts
+// src/features/cart/services/cartService.ts
+const stockReserved = toPositiveStock(inventory?.stockReserved);
+const stockAvailable = Math.max(
+  0,
+  toPositiveStock(inventory?.stockAvailable) - stockReserved
+);
+
+const availabilityMessage = getAvailabilityMessage({
+  product, inventory, unitPrice, stockAvailable, quantity
+});
+const isAvailable = availabilityMessage === '';
+```
+
+The cart UI surfaces availability issues immediately:
+
+<CardGroup cols={2}>
+  <Card title="Price Change" icon="arrow-up">
+    When the live price differs from `priceAtAdd`, a warning banner reads *"N producto(s) cambió de precio. Revisa el total antes de confirmar."* The summary shows both the old (strikethrough) and new prices.
+  </Card>
+  <Card title="Out of Stock" icon="x-circle">
+    When `stockAvailable` drops to zero between cart add and checkout, the row shows *"Sin stock disponible."* and the **Confirmar pedido** button is disabled until the item is removed.
+  </Card>
+  <Card title="Product Inactive" icon="eye-slash">
+    If `product.active === false` or `inventory.enabled === false`, the availability message reads *"El producto ya no está activo."* or *"El producto no está disponible para venta."*
+  </Card>
+  <Card title="Invalid Price" icon="tag">
+    If the computed `unitPrice` is 0 or negative, the message is *"El producto no tiene un precio válido."*
+  </Card>
+</CardGroup>
+
+<Warning>
+  Items marked unavailable are excluded from the order total but remain visible in the cart so the buyer can remove them manually. The **Confirmar pedido** button stays disabled while any `invalidItems.length > 0`.
+</Warning>
+
+---
+
+## Order Creation
+
+`createOrder()` (`src/features/cart/services/orderService.ts`) performs all writes in a single Firestore `writeBatch`:
+
+```ts
+interface CreateOrderParams {
+  user: User;
+  selectedLocation: Location;
+  total: number;
+  includedItems: CartItemWithProduct[];
+}
+
+interface CreateOrderResult {
+  orderId: string;      // UUID v7 + "_" + 6-char z-base-32 label
+  orderSecret: string;  // 4-digit PIN for anonymous order lookup
+  paymentCode: string;  // same as orderId; used as payments doc ID
+}
+```
+
+The batch performs three types of writes atomically:
+
+1. **`orders/{orderId}`** — the order document (see field reference below)
+2. **`orders/{orderId}/orderItems/{itemId}`** — one document per included cart item
+3. **`inventory/{productId}`** — `stockReserved += quantity` for each item
+4. **`payments/{paymentCode}`** — initial payment record with `status: 'PENDIENTE'`
+
+```ts
+// Order document written by createOrder()
+{
+  orderId,
+  secret: orderSecret,        // 4-digit PIN for anonymous lookup
+  buyerId: user.uid,
+  sellerId: null,
+  customerName: user.displayName || 'Cliente no registrado',
+  customerPhone: user.phoneNumber || '',
+  address: selectedLocation.label,
+  status: 'CREADO',
+  total,
+  locationId: selectedLocation.id,
+  paymentStatus: 'PENDIENTE',
+  deliveryStatus: null,
+  paymentId: paymentCode,
+  createdAt: serverTimestamp(),
+  updatedAt: serverTimestamp(),
+}
+```
+
+---
+
+## Order ID Format
+
+Order IDs are generated as `{uuidv7}_{zBase32Label}`:
+
+```ts
+// Example: "019e74a5-808a-7321-9127-281f098b2d8e_3dg-zjs"
+export function generateOrderId(): string {
+  return `${uuidv7()}_${generateZBase32Label()}`;
+}
+
+// The friendly label (after "_") is shown in the UI
+export function parseOrderId(orderId: string) {
+  const idx = orderId.indexOf('_');
+  return {
+    uuid: orderId.slice(0, idx),
+    friendlyName: orderId.slice(idx + 1), // e.g. "3dg-zjs"
+  };
+}
+```
+
+The `secret` field is a 4-digit shuffled PIN generated client-side, used to allow anonymous order status lookups without requiring sign-in.
+
+---
+
+## Firestore Data Model
+
+### `users/{uid}/cartItems` subcollection
+
+| Field | Type | Description |
+|---|---|---|
+| `cartItemId` | `string` | Same as `productId` (document ID) |
+| `userId` | `string` | Firebase Auth UID of the cart owner |
+| `productId` | `string` | Reference to `products` collection |
+| `quantity` | `number` | Integer ≥ 1 |
+| `updatedAt` | `Timestamp` | `serverTimestamp()` on every upsert |
+| `priceAtAdd` | `number?` | Price captured when item was added; used for price-change detection |
+
+### `payments` collection
+
+| Field | Type | Description |
+|---|---|---|
+| `paymentId` | `string` | Same as `orderId` |
+| `orderId` | `string` | Reference to the order |
+| `amount` | `number` | Order total in Bolivianos |
+| `method` | `string` | `cash_on_delivery` (default); seller updates to final method |
+| `status` | `string` | `PENDIENTE` → `PAGADO` after seller validation |
+| `registeredBy` | `string` | Buyer's `uid` |
+| `registeredAt` | `Timestamp` | Creation time |
+
+<Note>
+  Payment methods recognized by the system include **EFECTIVO** (cash on delivery), **QR**, **TRANSFERENCIA**, and **TARJETA**. The method is recorded in the `payments` document when the seller validates payment.
+</Note>
+
+---
+
+## End-to-End Tests
+
+Cart behavior is covered by Playwright tests in `tests/cart/cart.spec.ts`:
+
+```
+Cart - Carrito
+  ✓ should display cart items when user is authenticated
+      — shows "Leche PIL Natural 900 ml" at Bs 9.70/u
+      — shows "Pan Integral Bimbo (precio rebajado)" at Bs 15.00 → Bs 10.00/u
+  ✓ should show empty cart message when user has no items
+      — "Tu carrito está vacío" + "Comprar ahora" link
+  ✓ should clear cart when user logs out
+  ✓ should show empty cart after logout and login with different user
+  ✓ should allow non-logged user to add items to cart
+  ✓ should show updated price in real time before confirming
+      — price change banner: "El precio subió de Bs 10.00 a Bs 12.50."
+  ✓ should mark product unavailable in real time when stock reaches zero
+      — "Sin stock disponible." + "Confirmar pedido" disabled
+  ✓ should show image fallback in real time when product image breaks
+  ✓ should clear local storage cart for guest/anonymous user
+      — ClearCartModal confirm/cancel flow
+  ✓ should clear Firestore cart for authenticated user
+      — verifies users/{uid}/cartItems is empty via Admin SDK
+```

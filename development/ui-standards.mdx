@@ -1,0 +1,118 @@
+---
+title: "SansiStore UI Standards: Tokens, Components, and Layout"
+sidebarTitle: "UI Standards"
+description: "SansiStore enforces theme tokens for dark mode support, Inter as the sole font, max-w-7xl layout width, and Lucide icons — never hardcoded Tailwind colors."
+---
+
+SansiStore's UI is built on a set of enforced conventions that keep every screen consistent and dark-mode-ready with zero extra effort. The rules below come directly from `UI.md` and `src/styles/global.css` — follow them on every component you touch.
+
+## The Golden Rule: Always Use Theme Tokens
+
+**Never hardcode colors.** Hardcoded Tailwind color utilities like `bg-white` or `text-gray-900` break dark mode and make the design inconsistent across pages. Always reach for a `--theme-*` CSS custom property.
+
+<CodeGroup>
+  ```tsx ✅ Correcto (BIEN)
+  <div className="bg-(--theme-card-bg) text-(--theme-text) border border-(--theme-border)">
+    Contenido de la tarjeta
+  </div>
+  ```
+
+  ```tsx ❌ Incorrecto (MAL)
+  <div className="bg-white text-gray-900 border border-gray-200">
+    Contenido de la tarjeta
+  </div>
+  ```
+</CodeGroup>
+
+## Token Reference
+
+All tokens are defined in `src/styles/global.css` and switch values automatically between light and dark mode via `html[data-theme='dark']`.
+
+| Token | Light value | Use for |
+|---|---|---|
+| `bg-(--theme-bg)` | `#fffbf4` | Page background |
+| `text-(--theme-text)` | `#1e1e1e` | Body text |
+| `bg-(--theme-card-bg)` | `#ffffff` | Cards, panels, modals |
+| `bg-(--theme-secondary-bg)` | `#e8e5d8` | Chips, subtle backgrounds |
+| `border-(--theme-border)` | `rgba(136,176,75,0.15)` | All borders |
+| `text-primary` / `bg-primary` | `#88b04b` | Brand green (actions, highlights) |
+| `bg-(--theme-error-bg)` + `text-(--theme-error)` | red scale | Error states |
+| `bg-(--theme-success-bg)` + `text-(--theme-success)` | green scale | Success states |
+| `bg-(--theme-warning-bg)` + `text-(--theme-warning)` | amber scale | Warning states |
+| `bg-(--theme-info-bg)` + `text-(--theme-info)` | blue scale | Informational states |
+| `bg-(--theme-danger-bg)` + `text-(--theme-danger)` | red scale | Danger / destructive actions |
+
+For dimmed text use `text-(--theme-text) opacity-60` — not `text-gray-500` or `text-gray-400`.
+
+## Common Replacements
+
+| Hardcoded class | Replace with |
+|---|---|
+| `bg-white` | `bg-(--theme-card-bg)` |
+| `text-gray-900`, `text-black` | `text-(--theme-text)` |
+| `text-gray-500`, `text-gray-400` | `text-(--theme-text) opacity-60` |
+| `bg-gray-100`, `bg-gray-50` | `bg-(--theme-secondary-bg)` |
+| `border-gray-200` | `border-(--theme-border)` |
+
+<Warning>
+  The only exception to inline color usage is **order status badges**. Status colors encode semantic information and are centralized in `OrderStatusBadge.tsx` — never scatter them across JSX files.
+</Warning>
+
+## Page Structure
+
+Every page in the app must include a `Navbar` at the top and a `Footer` at the bottom. Use an existing layout component (`SellerLayout`, `OrdersLayout`) or add both manually — no screen should be left without them.
+
+```tsx
+<main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6">
+  {/* page content */}
+</main>
+```
+
+Key layout rules:
+
+- **Content width:** always `max-w-7xl` for full pages, `max-w-2xl` for narrow forms or modals. Do not mix `5xl`, `6xl`, or `4xl` — mismatched widths make sections visually misaligned across the app.
+- **Navbar and Footer:** use `w-full px-4 sm:px-8 lg:px-12 xl:px-16` with no `max-w` — they sit full-width and hug the edges. Only the *content* inside is constrained to `max-w-7xl`.
+- **Body height:** `min-h-screen flex flex-col` on the root container ensures the footer is always pinned at the bottom; the main content area gets `flex-1`.
+
+## Typography
+
+<Note>
+  One font, one rule: **Inter only**. It is loaded once in `Layout.astro` and set as the default `font-family` on `body` in `global.css`. You never need to import or specify it again.
+</Note>
+
+- Use `font-bold` and `font-black` for headings and titles — not a different typeface.
+- `font-display` is available and also resolves to Inter.
+- Do **not** use `font-['Outfit']` or `style={{ fontFamily: ... }}` inline — these are legacy patterns that must be replaced with `font-display`.
+
+## Navbar Rules
+
+- **Link text in Spanish:** Productos, Órdenes, Inventario, Entregas, Admin.
+- **Active state:** the current section's link gets `text-primary` plus an underline. Compare `window.location.pathname` against the `href` and set `aria-current="page"`.
+- **Unauthenticated state:** show the "Iniciar sesión" button as a visible green pill with an icon — do not hide it in a dropdown.
+- **Root route:** `/` redirects to `/productos`; there is no welcome landing page.
+- **No wrapping:** keep `shrink-0` on logo and action buttons, `whitespace-nowrap` on nav links, and `truncate` on the username to prevent the navbar from breaking at wide viewports.
+
+## Brand Logo
+
+The SansiStore logo is always composed of two elements:
+
+1. A `ShoppingBag` icon (from `lucide-react`) inside a rounded green pill: `rounded-xl bg-primary`.
+2. The text **"SansiStore"** in `font-black`, with the word "Store" wrapped in `text-primary`.
+
+Use this exact pattern in both the Navbar and Footer. Reference the implementation in `src/components/Navbar.tsx`.
+
+## Radii, Icons, and Libraries
+
+| Concern | Rule |
+|---|---|
+| Card / panel corners | `rounded-2xl` |
+| Pill / button corners | `rounded-full` |
+| UI icons | `lucide-react` |
+| Brand / social logos | `react-icons` |
+| Component libraries | ❌ None — no shadcn, no MUI |
+
+Build every component with Tailwind utilities and `--theme-*` tokens. Third-party component libraries are not used in this project.
+
+## Dark Mode
+
+Dark mode is entirely automatic. When `html[data-theme='dark']` is set, every `--theme-*` token flips to its dark value as defined in `global.css`. If you always use tokens you get dark mode for free — no `dark:` Tailwind variants needed.

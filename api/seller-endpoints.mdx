@@ -1,0 +1,203 @@
+---
+title: "Seller API Endpoints Reference for SansiStore"
+sidebarTitle: "Seller Endpoints"
+description: "Server-side seller API routes for SansiStore: retrieve pending orders and daily cash collection summaries for the vendedor role."
+---
+
+Seller endpoints are available to users whose `roles` array in Firestore contains `"vendedor"`. The authenticated seller's UID is derived from the verified token, so both endpoints always return data scoped to the caller — there is no `sellerId` query parameter.
+
+Pass the Firebase ID token in every request:
+
+```
+Authorization: Bearer <Firebase_ID_Token>
+```
+
+---
+
+## GET /api/seller/pending-orders
+
+Returns all orders currently in `status: "CREADO"` that are assigned to the authenticated seller. Results are ordered by `createdAt` ascending (oldest pending order first).
+
+### Query Parameters
+
+This endpoint takes no query parameters. All filtering is performed server-side using the caller's UID as the `sellerId`.
+
+### Response Fields
+
+<ResponseField name="pedidos" type="array">
+  Array of pending order objects. Each object contains:
+
+  <ResponseField name="id_pedido" type="string">
+    Firestore document ID of the order.
+  </ResponseField>
+
+  <ResponseField name="productos" type="array">
+    Items from the `orderItems` sub-collection. Each product entry contains:
+
+    - `nombre` — product name (`productName` from Firestore, falls back to `"Producto sin nombre"`)
+    - `productId` — product ID (optional, omitted if not stored)
+    - `unitPrice` — unit price in bolivianos (optional)
+    - `quantity` — ordered quantity (optional)
+    - `subtotal` — line subtotal (optional)
+  </ResponseField>
+
+  <ResponseField name="fecha" type="string">
+    Order creation date as a `YYYY-MM-DD` string (date part only, no time component).
+  </ResponseField>
+
+  <ResponseField name="estado" type="string">
+    Always `"pendiente"` for this endpoint.
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="total" type="number">
+  Total count of pending orders returned.
+</ResponseField>
+
+### Example
+
+```bash
+curl -H 'Authorization: Bearer <ID_TOKEN>' \
+  https://sansistore-umss.vercel.app/api/seller/pending-orders
+```
+
+```json
+{
+  "pedidos": [
+    {
+      "id_pedido": "Fk9aB3xZqLmN7dEo",
+      "productos": [
+        {
+          "nombre": "Cuaderno universitario",
+          "productId": "prod_xyz",
+          "unitPrice": 15,
+          "quantity": 2,
+          "subtotal": 30
+        }
+      ],
+      "fecha": "2024-11-01",
+      "estado": "pendiente"
+    }
+  ],
+  "total": 1
+}
+```
+
+<Note>
+  Only orders with `status == "CREADO"` are returned. Orders that have been confirmed, cancelled, or are in delivery are excluded.
+</Note>
+
+---
+
+## GET /api/seller/daily-collections
+
+Returns a summary of all cash collections made for the authenticated seller's orders on a given day. Only orders whose payment status normalises to one of `cobrado`, `pagado`, `paid`, or `collected` are included, and only those whose collection timestamp falls within the requested date in the **America/La_Paz** timezone (UTC−4).
+
+### Query Parameters
+
+<ParamField query="date" type="string">
+  Date in `YYYY-MM-DD` format (e.g. `2024-11-01`). Defaults to today's date in Bolivia time if omitted.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="date" type="string">
+  The date used for the query, in `YYYY-MM-DD` format.
+</ResponseField>
+
+<ResponseField name="totalCollected" type="number">
+  Sum of all `total` amounts across collected orders for the day, in bolivianos.
+</ResponseField>
+
+<ResponseField name="orderCount" type="number">
+  Number of collected orders included in the summary.
+</ResponseField>
+
+<ResponseField name="confirmedByBuyerCount" type="number">
+  Number of orders where the buyer confirmed reception (`buyerReceptionConfirmed` or `customerConfirmed` is `true`).
+</ResponseField>
+
+<ResponseField name="orders" type="array">
+  Array of individual collection records. Each entry contains:
+
+  <ResponseField name="orderId" type="string">
+    Firestore document ID of the order.
+  </ResponseField>
+  <ResponseField name="paymentId" type="string | null">
+    ID of the linked payment document.
+  </ResponseField>
+  <ResponseField name="total" type="number">
+    Amount collected for this order, in bolivianos.
+  </ResponseField>
+  <ResponseField name="collectedAt" type="string">
+    ISO 8601 timestamp of when the payment was collected. Resolved from `payment.collectedAt`, then `order.paymentCollectedAt`, then `order.deliveredAt`, then `order.updatedAt`.
+  </ResponseField>
+  <ResponseField name="paymentStatus" type="string">
+    Raw payment status string (e.g. `"cobrado"`).
+  </ResponseField>
+  <ResponseField name="paymentStatusLabel" type="string">
+    Human-readable label (e.g. `"Cobrado"`).
+  </ResponseField>
+  <ResponseField name="paymentMethod" type="string">
+    Payment method (e.g. `"cash_on_delivery"`).
+  </ResponseField>
+  <ResponseField name="courierId" type="string | null">
+    UID of the courier who collected the payment.
+  </ResponseField>
+  <ResponseField name="courierName" type="string">
+    Resolved display name of the courier. Falls back to `"Mensajero no identificado"`.
+  </ResponseField>
+  <ResponseField name="courierEmail" type="string | null">
+    Email address of the courier, if available.
+  </ResponseField>
+  <ResponseField name="customerName" type="string">
+    Customer name from the order. Falls back to `"Cliente no registrado"`.
+  </ResponseField>
+  <ResponseField name="deliveryId" type="string | null">
+    Firestore document ID of the linked delivery.
+  </ResponseField>
+  <ResponseField name="buyerReceptionConfirmed" type="boolean">
+    Whether the buyer confirmed receiving the order.
+  </ResponseField>
+  <ResponseField name="buyerReceptionConfirmedAt" type="string | null">
+    ISO 8601 timestamp of buyer confirmation, if available.
+  </ResponseField>
+</ResponseField>
+
+### Example
+
+```bash
+curl -H 'Authorization: Bearer <ID_TOKEN>' \
+  'https://sansistore-umss.vercel.app/api/seller/daily-collections?date=2024-11-01'
+```
+
+```json
+{
+  "date": "2024-11-01",
+  "totalCollected": 320,
+  "orderCount": 3,
+  "confirmedByBuyerCount": 2,
+  "orders": [
+    {
+      "orderId": "Fk9aB3xZqLmN7dEo",
+      "paymentId": "pay_001",
+      "total": 150,
+      "collectedAt": "2024-11-01T16:30:00.000Z",
+      "paymentStatus": "cobrado",
+      "paymentStatusLabel": "Cobrado",
+      "paymentMethod": "cash_on_delivery",
+      "courierId": "uid_mensajero",
+      "courierName": "Carlos Rojas",
+      "courierEmail": "carlos.rojas@fcyt.umss.edu.bo",
+      "customerName": "Ana Mamani",
+      "deliveryId": "del_001",
+      "buyerReceptionConfirmed": true,
+      "buyerReceptionConfirmedAt": "2024-11-01T16:45:00.000Z"
+    }
+  ]
+}
+```
+
+<Tip>
+  Orders where no `courierId` can be resolved (from `payment.collectedBy`, `order.collectedBy`, or `delivery.courierId`) are silently skipped in the response. If an order is missing from the summary, check that the delivery document has a `courierId` set.
+</Tip>

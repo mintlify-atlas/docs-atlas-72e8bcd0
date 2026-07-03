@@ -1,0 +1,117 @@
+---
+title: "Configure Environment Variables for SansiStore"
+sidebarTitle: "Environment Setup"
+description: "All environment variables required by SansiStore for local development, emulator mode, and production Firebase deployment on Vercel."
+---
+
+SansiStore uses a single `.env` file at the repository root to drive both local-emulator and live-production modes. The key that controls which mode is active is `PUBLIC_APP_ENV`. Setting it to `development` (the default in `.env.example`) makes every Firebase SDK call route to local emulators; setting it to `production` points the app at the real Firebase project.
+
+## Environment Summary
+
+| Mode | `PUBLIC_APP_ENV` | Firebase target | Admin credentials needed? |
+|---|---|---|---|
+| Local development | `development` | Emulators (localhost) | No — emulators accept any token |
+| Production / Vercel | `production` | Live Firebase project | Yes — service account required |
+
+## All Variables
+
+<AccordionGroup>
+  <Accordion title="Client-side Firebase Config (PUBLIC_*)">
+    These variables are prefixed with `PUBLIC_` and are bundled into the client JavaScript. They are safe to expose in the browser — Firebase projects are identified by these values, not secured by them.
+
+    | Variable | Example value | Description |
+    |---|---|---|
+    | `PUBLIC_FIREBASE_API_KEY` | `AIzaSy...` | Firebase Web API key. In development mode the value is overridden to `dummy-api-key-for-emulator` at runtime. |
+    | `PUBLIC_FIREBASE_AUTH_DOMAIN` | `sansistore.firebaseapp.com` | OAuth redirect domain for Firebase Auth. |
+    | `PUBLIC_FIREBASE_PROJECT_ID` | `sansistore` | Firestore project identifier. Also used by the Admin SDK. |
+    | `PUBLIC_FIREBASE_STORAGE_BUCKET` | `sansistore.appspot.com` | Cloud Storage bucket for product images. |
+    | `PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | `000000000000` | Sender ID for Firebase Cloud Messaging (future push notifications). |
+    | `PUBLIC_FIREBASE_APP_ID` | `1:000:web:abc` | Firebase App ID. |
+    | `PUBLIC_FIREBASE_MEASUREMENT_ID` | `G-XXXXXXX` | Google Analytics measurement ID. Analytics is only initialised when `PUBLIC_APP_ENV=production`. |
+    | `PUBLIC_APP_ENV` | `development` \| `production` | **The main environment switch.** Any value other than `production` activates emulator mode. |
+  </Accordion>
+
+  <Accordion title="Server-side Firebase Admin Credentials">
+    These variables are **never** sent to the browser. They are used exclusively inside Astro server routes and API endpoints via the `firebase-admin` SDK (`src/lib/firebase-admin.ts`).
+
+    You can supply credentials in one of two ways — the Admin SDK checks them in this order:
+
+    1. **Full service account JSON string** — paste the entire JSON as one line:
+       ```
+       FIREBASE_SERVICE_ACCOUNT_KEY={"type":"service_account","project_id":"sansistore",...}
+       ```
+    2. **Individual fields** — split the service account into three separate variables:
+       ```
+       FIREBASE_CLIENT_EMAIL=firebase-adminsdk@sansistore.iam.gserviceaccount.com
+       FIREBASE_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n..."
+       ```
+       Note: Vercel stores the private key with literal `\n` escape sequences. The `firebase-admin.ts` file automatically converts them with `.replace(/\\n/g, '\n')`.
+
+    If neither is present and `PUBLIC_APP_ENV !== 'production'`, the Admin SDK runs without credentials against the local emulators. In production on Vercel, one of the two options above must be configured.
+
+    | Variable | Description |
+    |---|---|
+    | `FIREBASE_SERVICE_ACCOUNT_KEY` | Full service account JSON as a single-line string. Takes precedence over the individual fields below. |
+    | `FIREBASE_CLIENT_EMAIL` | `client_email` field from the service account JSON. Used when `FIREBASE_SERVICE_ACCOUNT_KEY` is not set. |
+    | `FIREBASE_PRIVATE_KEY` | `private_key` field from the service account JSON. Literal `\n` sequences are replaced at runtime. |
+  </Accordion>
+
+  <Accordion title="Dev-only Bypass Flags">
+    These flags exist only for local development convenience and must never reach production.
+
+    | Variable | Default | Description |
+    |---|---|---|
+    | `ENABLE_DEV_ADMIN_BYPASS` | `true` (in `.env.example`) | When `true`, grants admin-level access to the UID specified by `DEV_ADMIN_UID` without requiring a real role in Firestore. Use this only while auth/role user stories are not yet fully implemented. |
+    | `DEV_ADMIN_UID` | `dev-admin` | The Firebase Auth UID that receives the bypass admin grant when `ENABLE_DEV_ADMIN_BYPASS=true`. |
+  </Accordion>
+</AccordionGroup>
+
+## How the SDK Switches Between Emulators and Production
+
+The client-side `src/lib/firebase.ts` reads `PUBLIC_APP_ENV` at module initialisation time and conditionally connects to the emulators:
+
+```typescript
+// src/lib/firebase.ts (simplified)
+const db =
+  import.meta.env.PUBLIC_APP_ENV !== 'production'
+    ? initializeFirestore(app, { experimentalForceLongPolling: true })
+    : getFirestore(app);
+
+// Connect to emulators when not in production
+if (import.meta.env.PUBLIC_APP_ENV !== 'production') {
+  connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+  connectFirestoreEmulator(db, '127.0.0.1', 8080);
+}
+```
+
+The server-side `src/lib/firebase-admin.ts` does the same via environment variables that the Firebase Admin SDK reads natively:
+
+```typescript
+// src/lib/firebase-admin.ts (simplified)
+if (useEmulators) {
+  // IPv4 explicitly — Node resolves 'localhost' to ::1 (IPv6) first,
+  // but emulators listen on IPv4 only → ECONNREFUSED otherwise.
+  process.env.FIRESTORE_EMULATOR_HOST ||= '127.0.0.1:8080';
+  process.env.FIREBASE_AUTH_EMULATOR_HOST ||= '127.0.0.1:9099';
+}
+```
+
+The `experimentalForceLongPolling: true` flag on the client Firestore instance avoids WebSocket connection failures inside some environments (Docker, certain corporate proxies) while using the emulator.
+
+## Setting Variables on Vercel
+
+Production secrets are stored in **Vercel project settings → Environment Variables**, not in the repository. To update them:
+
+1. Go to the [Vercel dashboard](https://vercel.com) → your SansiStore project → **Settings** → **Environment Variables**.
+2. Add or update the variable for the target environment (`Production`, `Preview`, or `Development`).
+3. Redeploy to apply the changes.
+
+Ask the team for the current production values — they are not committed to the repository.
+
+<Warning>
+  **Never set `ENABLE_DEV_ADMIN_BYPASS=true` in any Vercel environment.** This flag bypasses all Firestore role checks and would grant unrestricted admin access to any user with knowledge of the `DEV_ADMIN_UID` value. It is valid only in your local `.env` file.
+</Warning>
+
+<Tip>
+  If you are working on a feature that does not touch auth or the Admin SDK, you only need `PUBLIC_APP_ENV=development` and the `PUBLIC_FIREBASE_*` placeholders from `.env.example`. The Admin SDK fields can be left blank — the emulator accepts un-credentialed admin connections automatically.
+</Tip>

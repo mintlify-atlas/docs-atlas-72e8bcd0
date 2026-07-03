@@ -1,0 +1,147 @@
+---
+title: "Testing Strategy: Vitest Unit Tests and Playwright E2E"
+sidebarTitle: "Testing"
+description: "SansiStore uses Vitest for unit tests and Playwright for E2E tests, with Docker support for isolated CI environments and Firebase emulators."
+---
+
+SansiStore has two complementary test suites: fast, isolated unit tests powered by Vitest, and full browser-driven end-to-end tests powered by Playwright. Both suites share the same `tests/` directory and can run natively or inside Docker for a clean CI-equivalent environment.
+
+## Unit Tests (Vitest)
+
+Unit tests live in `tests/unit/` and are run with:
+
+```bash
+bun run test:unit
+```
+
+Vitest is configured via `vitest.config.ts` using `getViteConfig` from Astro so the same module resolution applies in tests as in the app itself.
+
+### Unit Test Files
+
+| File | What it covers |
+|---|---|
+| `accepted-order-sorting.spec.ts` | Sorting logic for accepted orders |
+| `default-route.spec.ts` | Default route redirect behaviour |
+| `delivery-availability.spec.ts` | Whether a delivery slot is available |
+| `delivery-status-flow.spec.ts` | Valid delivery status transitions |
+| `messenger-accept-eligibility.spec.ts` | Rules for a courier accepting an order |
+| `messenger-collection-summary.spec.ts` | Cash collection summary calculation |
+| `messenger-money-format.spec.ts` | Currency formatting helpers |
+| `messenger-order-visibility.spec.ts` | Which orders a courier can see |
+
+## E2E Tests (Playwright)
+
+End-to-end tests live in `tests/` (excluding `tests/unit/`) and target a real running dev server backed by Firebase emulators. Playwright is configured in `playwright.config.ts` with `baseURL: http://127.0.0.1:4321` and runs across Chromium, Firefox, and WebKit in parallel.
+
+The web server is started automatically by Playwright (`bun run dev`) with emulator environment variables injected:
+
+```
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8180
+FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9199
+PUBLIC_APP_ENV=development
+```
+
+### E2E Test Files
+
+| File | Feature area |
+|---|---|
+| `auth/login.spec.ts` | Authentication and login flow |
+| `cart/cart.spec.ts` | Shopping cart operations |
+| `courier/courier-smoke.spec.ts` | Courier delivery smoke tests |
+| `favorites/favorites.spec.ts` | Favorites add/remove |
+| `home/home.spec.ts` | Home page rendering |
+| `orders/failed-orders.spec.ts` | Failed order handling |
+| `orders/my-orders.spec.ts` | Order history view |
+| `products/product-detail.spec.ts` | Product detail page |
+| `products/product-list.spec.ts` | Product listing and filters |
+| `profile/profile.spec.ts` | User profile page |
+| `review/post.spec.ts` | Posting a product review |
+
+## Running Tests
+
+### Native Setup
+
+<Steps>
+  <Step title="Install prerequisites">
+    You need **Bun**, **Java 21** (required for the Firestore emulator), and the Playwright browser binaries.
+
+    ```bash
+    bun install
+    bunx playwright install --with-deps
+    ```
+  </Step>
+  <Step title="Start Firebase emulators">
+    The E2E suite requires Firestore and Auth emulators to be running before Playwright starts:
+
+    ```bash
+    bun run emu
+    ```
+  </Step>
+  <Step title="Run the tests">
+    <CodeGroup>
+      ```bash All tests
+      bunx playwright test
+      ```
+
+      ```bash Unit tests only
+      bun run test:unit
+      ```
+
+      ```bash Specific file
+      bunx playwright test tests/auth/login.spec.ts
+      ```
+
+      ```bash By test name
+      bunx playwright test -g "login"
+      ```
+    </CodeGroup>
+  </Step>
+  <Step title="View the HTML report">
+    ```bash
+    bunx playwright show-report
+    ```
+  </Step>
+</Steps>
+
+### Docker Setup
+
+Docker gives you a clean, isolated environment that matches CI exactly. The `Dockerfile.testing` image is based on `mcr.microsoft.com/playwright:v1.59.1-noble` with Java 21 and Bun added on top. Source files, tests, and report output directories are bind-mounted from the host so you can inspect results without copying files out of the container.
+
+<Steps>
+  <Step title="Build and run all tests">
+    ```bash
+    docker compose up testing
+    ```
+  </Step>
+  <Step title="Run a specific test file inside Docker">
+    ```bash
+    docker compose run --rm testing bunx playwright test tests/auth/login.spec.ts
+    ```
+  </Step>
+  <Step title="View the report on your host machine">
+    Because `playwright-report/` is a shared volume, you can open the report generated inside Docker with your native Playwright installation:
+
+    ```bash
+    bunx playwright show-report
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  In CI, Playwright is configured with `retries: 2`, `workers: 4`, and outputs both JUnit XML (`junit-result/results.xml`) and JSON (`junit-result/results.json`) reports for pipeline dashboards.
+</Note>
+
+## CI Behaviour
+
+The `playwright.config.ts` detects the `CI` environment variable and adjusts automatically:
+
+| Setting | Local | CI |
+|---|---|---|
+| Retries | 0 | 2 |
+| Workers | CPU auto | 4 |
+| Reporter | list + HTML | dot + JUnit + JSON |
+| `forbidOnly` | false | true |
+
+<Tip>
+  Set `ENABLE_DEV_ADMIN_BYPASS=true` and `DEV_ADMIN_UID` in your local `.env` to skip Firebase Auth token verification during development testing. Never enable this in production.
+</Tip>

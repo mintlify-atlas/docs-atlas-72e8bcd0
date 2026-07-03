@@ -1,0 +1,225 @@
+---
+title: "Browse and Search the SansiStore Product Catalog"
+sidebarTitle: "Catalog"
+description: "The SansiStore product catalog lets buyers browse by category, view featured products, read reviews, and see real-time stock availability."
+---
+
+The SansiStore product catalog is the primary storefront, available at `/productos`. It loads all active products from the `products` Firestore collection and merges each product's live inventory data from the `inventory` collection in a single parallel fetch. Buyers can filter by category, toggle an offers-only view, sort results, run full-text search with history, and navigate directly from a product card to the full detail page at `/productos/[slug]`.
+
+## Buyer Journey
+
+<Steps>
+  <Step title="Browse the catalog">
+    Visit `/productos`. The `<FeaturedProducts>` component fetches active products via `fetchCatalogProducts()`, which queries `products` (where `active == true`, ordered by `createdAt desc`) and joins each record with its `inventory` doc.
+  </Step>
+  <Step title="Filter and sort">
+    Use the `<CategoryFilter>` dropdown to narrow by category. Toggle **Ofertas** to show only discounted items. Use the sort dropdown (Popular · Recientes · A-Z · Z-A) to reorder results. All filter state is reflected in URL query params (`?category=`, `?offers=true`, `?sort=`, `?page=`).
+  </Step>
+  <Step title="Search">
+    Type in the search bar. Up to five matching product suggestions appear in a live dropdown alongside up to five recent search history entries (stored in `localStorage` under `sansistore-search-history`). Press **Enter** or click a suggestion to apply the search; matching text is highlighted inline.
+  </Step>
+  <Step title="View product detail">
+    Click any product card to open `/productos/[slug]`. The detail page shows the full product image, price (or offer price), stock status, add-to-cart, add-to-favorites, breadcrumb navigation, and a reviews section.
+  </Step>
+  <Step title="Add to cart or save to favorites">
+    Tap **Agregar al carrito** to add the item immediately. Tap the heart icon to toggle the product in or out of the favorites list. Both actions work for guest and authenticated users.
+  </Step>
+</Steps>
+
+---
+
+## The `<FeaturedProducts>` Component
+
+`FeaturedProducts` (`src/components/FeaturedProducts.tsx`) is a client-side React 19 component wrapped in a `<CartProvider>`. It accepts the following props, all of which can be seeded from Astro's URL search-params at the page level:
+
+```ts
+interface FeaturedProductsProps {
+  initialSearch?: string;       // ?q=
+  initialCategory?: string | null; // ?category=
+  initialOffersOnly?: boolean;  // ?offers=true
+  initialSort?: string | null;  // ?sort= (best-sellers | recent | name-asc | name-desc)
+  initialPage?: number;         // ?page=
+  favoritesOnly?: boolean;      // true on /favoritos
+  title?: string;               // heading text
+}
+```
+
+The `/productos` Astro page seeds these props from `Astro.url.searchParams`:
+
+```astro
+// src/pages/productos/index.astro
+<FeaturedProducts
+  client:load
+  initialSearch={initialSearch}
+  initialCategory={initialCategory}
+  initialOffersOnly={initialOffersOnly}
+  initialSort={initialSort}
+  initialPage={Number.isNaN(initialPage) ? 1 : initialPage}
+/>
+```
+
+Results are paginated at **12 items per page**. Sort options available:
+
+| Value | Label |
+|---|---|
+| `best-sellers` | Popular |
+| `recent` | Recientes |
+| `name-asc` | A-Z |
+| `name-desc` | Z-A |
+
+---
+
+## Category Filtering
+
+`<CategoryFilter>` (`src/components/CategoryFilter.tsx`) is a self-contained dropdown that queries the `categories` Firestore collection ordered by `name asc` and filters out any category where `active === false`. Selecting a category sets the `?category=<id>` URL param and notifies the parent via `onCategoryChange`.
+
+```ts
+interface CategoryFilterProps {
+  selectedCategory: string | null;
+  onCategoryChange: (categoryId: string | null) => void;
+}
+```
+
+The dropdown includes an inline search field that filters visible categories client-side without a network round-trip. Selecting **Todas** clears the active filter.
+
+<Note>
+  The catalog validates the `?category=` param on mount by checking whether the Firestore document exists and has `active !== false`. Invalid category IDs are silently removed from the URL.
+</Note>
+
+---
+
+## Product Cards
+
+Each `<ProductCard>` (`src/features/catalog/components/ProductCard.tsx`) renders one product from the merged catalog + inventory result. The card shows:
+
+<CardGroup cols={2}>
+  <Card title="Name & Price" icon="tag">
+    Product name (up to two lines, truncated), current price formatted as `Bs X.XX`. When `hasOffer` is `true`, the offer price is shown prominently and the original price appears with a strikethrough.
+  </Card>
+  <Card title="Badges" icon="star">
+    Offer/discount badges appear in red (`bg-red-600`). Custom `badge` text appears in the brand primary color. A separate **Popular** amber badge is applied when `soldCount` meets the popularity threshold from `isPopularProduct()`.
+  </Card>
+  <Card title="Stock Status" icon="box">
+    Effective stock = `stockAvailable − stockReserved`. When `effectiveStock <= 0`, an **Agotado** badge overlays the image and the add-to-cart button is disabled. When `enabled === false` on the inventory doc, a **No disponible** badge is shown instead.
+  </Card>
+  <Card title="Favorite Toggle" icon="heart">
+    The `<FavoriteButton>` sits in the top-right corner of the image. It reads state from `useFavorites()` and calls `toggleFavorite(productId)` on click, updating both `localStorage` and Firestore for authenticated users.
+  </Card>
+</CardGroup>
+
+Clicking anywhere on the card (except the cart button or favorite button) navigates to `/productos/[slug]` via an invisible full-card `<a>` overlay.
+
+---
+
+## Product Detail Page (`/productos/[slug]`)
+
+The detail page is powered by the `<ProductDetail>` component (`src/components/ProductDetail/index.tsx`), which wraps a `<CartProvider>` around `<ProductDetailInner>`.
+
+### Sub-components
+
+| Component | Responsibility |
+|---|---|
+| `BreadcrumbNav` | Renders an `aria-label="Ruta de navegación"` nav with links to **Productos** → **Detalle** |
+| `ProductImageSection` | Displays the full product image with fallback to `/product-placeholder.svg` |
+| `ProductInfoSection` | Name, description, price / offer price, stock count, add-to-cart button, add-to-favorites button |
+| `ReviewSection` | Loads and displays all reviews; shows the `ReviewForm` for authenticated users |
+| `ReviewCard` | Single review with star rating, comment text, reviewer name, and date |
+| `StockAlertButton` | Rendered when `effectiveStock === 0`; lets buyers register a stock-back alert |
+
+### Offer Price Display
+
+When `hasOffer` is `true` and `offerPrice` is a positive number, the detail page shows:
+
+```
+Bs 109.00    (-11%)
+~~Bs 123.00~~   ← original price, strikethrough
+```
+
+### Stock States
+
+<Tabs>
+  <Tab title="In Stock">
+    The **Agregar al carrito** button is enabled. The stock count is shown as `Stock: N disponibles`.
+  </Tab>
+  <Tab title="Out of Stock">
+    The **Agregar al carrito** button is disabled. The status label reads **Producto agotado** or **No disponible** depending on whether `enabled` is false on the inventory record. `<StockAlertButton>` is rendered so buyers can request a restock notification.
+  </Tab>
+</Tabs>
+
+### Reviews
+
+Authenticated buyers can post a star rating (1–5) and a comment via `ReviewForm`. All reviews are shown in `ReviewSection` with an aggregate average score. A product with no reviews displays **Sin calificaciones** and the message *Este producto aún no tiene comentarios*.
+
+<Note>
+  Reviews are stored in the `reviews` subcollection of the product document. The detail page shows `4.5 de 5` aggregate score and individual half-star indicators for each review.
+</Note>
+
+---
+
+## Firestore Data Model
+
+### `products` collection
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | Firestore document ID |
+| `slug` | `string` | URL-safe identifier used in `/productos/[slug]` |
+| `name` | `string` | Display name |
+| `description` | `string` | Full product description |
+| `price` | `number` | Base price in Bolivianos |
+| `imageUrl` | `string?` | Product image URL; falls back to `/product-placeholder.svg` |
+| `active` | `boolean` | Only `active === true` products appear in the catalog |
+| `hasOffer` | `boolean` | Whether a discounted offer price is active |
+| `offerPrice` | `number?` | Discounted price shown when `hasOffer` is `true` |
+| `badge` | `string?` | Custom badge label (e.g. "Nuevo") |
+| `soldCount` | `number` | Total units sold; used for "Popular" ranking |
+| `categoryId` | `string?` | Reference to the `categories` collection |
+| `createdAt` | `Timestamp` | Used for `recent` sort order |
+
+### `inventory` collection
+
+| Field | Type | Description |
+|---|---|---|
+| `productId` | `string` | Matches the `products` document ID |
+| `stockAvailable` | `number` | Current available stock |
+| `stockReserved` | `number` | Units reserved by pending orders |
+| `stockTotal` | `number` | Total stock count |
+| `enabled` | `boolean` | `false` marks the product as unavailable regardless of stock |
+
+Effective available stock is computed as:
+
+```ts
+const effectiveStock = Math.max(0, stockAvailable - stockReserved);
+const isOutOfStock = effectiveStock <= 0;
+```
+
+---
+
+## End-to-End Tests
+
+The catalog is covered by Playwright tests in `tests/products/`:
+
+```
+product-list.spec.ts
+  ✓ load products page                  — title, CategoryFilter, Offers button visible
+  ✓ Ofertas                             — ?offers=true activates aria-pressed="true"
+  ✓ Categorias                          — ?category=lacteos reflects in URL
+  ✓ Buscar                              — ?q=Leche populates search input
+  ✓ Search with URL params              — q param round-trips in URL
+  ✓ Category filter with URL params
+  ✓ Offers filter with URL params       — offer product visible in filtered list
+  ✓ Sort by name A-Z                    — ?sort=name-asc persists in URL
+  ✓ Combined filters with URL params    — q + category + sort + page all preserved
+
+product-detail.spec.ts
+  ✓ loads product with inventory in stock
+  ✓ loads product out of stock          — StockAlertButton / "Producto agotado" visible
+  ✓ displays offer price when available — Bs 109.00, -11%, Bs 123.00 strikethrough
+  ✓ displays product reviews            — ReviewCard with rating, comment, average
+  ✓ displays no reviews message
+  ✓ product image loads
+  ✓ returns 404 for non-existent product
+  ✓ displays breadcrumb navigation
+  ✓ add to cart button is functional
+  ✓ add to cart button is disabled when out of stock
+```

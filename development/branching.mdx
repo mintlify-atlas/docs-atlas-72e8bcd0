@@ -1,0 +1,110 @@
+---
+title: "Git Branching Model and Release Process for SansiStore"
+sidebarTitle: "Branching"
+description: "SansiStore uses a three-tier branching model: feature branches merge to main (staging), and main promotes to production at sprint end."
+---
+
+SansiStore follows a three-tier branching strategy designed for continuous integration with Vercel auto-deploys. Every change flows through a feature branch, a QA gate on `main`, and finally into `production` at the end of each sprint.
+
+## Branch Tiers
+
+| Branch | Purpose | URL |
+|---|---|---|
+| `feature/*`, `fix/*`, `chore/*` | Day-to-day work, branched from `main` | preview deploy per PR |
+| `main` | Staging / QA (pre-release) | https://sansistore-test.vercel.app |
+| `production` | Live site | https://sansistore-umss.vercel.app |
+
+<Note>
+  Vercel automatically deploys every push. Pushing to `main` updates the staging environment; merging into `production` updates the live site. PR branches get their own ephemeral preview URL.
+</Note>
+
+## Daily Workflow
+
+<Steps>
+  <Step title="Start from an issue">
+    Every branch must be traceable to a GitHub issue — User Story, Bug, or Task. Create the issue first, then branch from `main` using a descriptive prefix:
+
+    ```bash
+    git checkout main && git pull
+    git checkout -b feature/123-add-product-search
+    # or: fix/456-cart-total-rounding
+    # or: chore/789-update-deps
+    ```
+  </Step>
+  <Step title="Open a pull request">
+    Push your branch and open a PR into `main`. Fill in the PR template — keep the description clear about what changed and why. Link the related issue.
+  </Step>
+  <Step title="CI must pass">
+    The pull request is not mergeable until all CI checks are green (lint, type-check, unit tests, and E2E tests).
+  </Step>
+  <Step title="Get approval and merge">
+    At least one teammate must approve the PR. Once approved and CI is green, squash-merge into `main`. Delete the feature branch after merging.
+  </Step>
+</Steps>
+
+## Sprint Release (main → production)
+
+<Steps>
+  <Step title="QA sign-off on staging">
+    After each sprint the team verifies the staging site at https://sansistore-test.vercel.app. Run the full E2E suite and confirm all acceptance criteria are met.
+  </Step>
+  <Step title="Open the release PR">
+    Open a pull request from `main` → `production`. The PR title should include the sprint number, e.g. `release: sprint 4`.
+  </Step>
+  <Step title="Merge to production">
+    Merge the PR after QA sign-off. Vercel deploys to https://sansistore-umss.vercel.app automatically.
+  </Step>
+</Steps>
+
+## Hotfix Workflow
+
+Use this only for critical bugs discovered on the live site that cannot wait for the next sprint.
+
+<Steps>
+  <Step title="Branch from production">
+    ```bash
+    git checkout production && git pull
+    git checkout -b hotfix/order-payment-crash
+    ```
+  </Step>
+  <Step title="Fix, test, and PR into production">
+    Apply the minimal fix, ensure CI passes, and open a PR directly into `production`. Do not bundle unrelated changes.
+  </Step>
+  <Step title="Back-merge production → main">
+    After merging the hotfix into `production`, immediately open a follow-up PR to merge `production` back into `main` so staging stays in sync.
+
+    ```bash
+    git checkout main && git pull
+    git merge production
+    git push origin main
+    ```
+  </Step>
+</Steps>
+
+## Global Rules
+
+<Warning>
+  Breaking these rules can corrupt the shared history and block the entire team.
+</Warning>
+
+- **Never force-push** to `main` or `production`.
+- **Never push directly** to `main` or `production` — all changes go through a PR.
+- **Always start from an issue** — no branch without a GitHub issue.
+- **Use the PR template** and keep descriptions clear.
+- **CI must pass** before merging any PR.
+
+## Daily Scrum Report
+
+Log daily progress in the `ScrumReports/` folder. Each team has a dedicated file (e.g., `ScrumReports/scrum_report_core_devs.md`). Append a new entry for each working day using the template below.
+
+```markdown
+## YYYY-MM-DD
+
+- **Yesterday:** <what you completed> (include commit SHAs or PR/Issue # if relevant)
+- **Today:** <what you will work on>
+- **Blockers:** <None | describe the blocker and what you need to unblock>
+```
+
+<Tip>
+  Linking commit SHAs or PR numbers in the **Yesterday** field makes it trivial to trace work back to code during sprint retrospectives.
+</Tip>

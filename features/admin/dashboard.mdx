@@ -1,0 +1,125 @@
+---
+title: "Admin Dashboard: Monitor SansiStore Operations"
+sidebarTitle: "Dashboard"
+description: "The SansiStore admin dashboard provides KPIs, order summaries, seller activity, and courier session status in a single operations view."
+---
+
+The SansiStore admin panel is the operational hub for platform administrators at UMSS. Accessible at `/admin` exclusively by users with the `admin` role, it renders the `AdminProtectedLayout` component which enforces role-based access before mounting any sub-section. The `DashboardPanel` component is the default landing view — it aggregates real-time KPIs from Firestore on mount and surfaces actionable alerts when reserved orders or cancellations require attention.
+
+## Accessing the Admin Panel
+
+Navigate to `/admin` and sign in with an account that carries the `admin` role. Non-admin users are redirected away by `AdminProtectedLayout`. The dashboard greets the admin by first name and displays the current date in `es-BO` locale.
+
+<Note>
+  Only accounts with the `admin` role in their Firestore `users` document (and matching Firebase Auth custom claims) can access `/admin`. Attempting to load the page without the role results in an immediate redirect.
+</Note>
+
+## Dashboard KPIs
+
+The `DashboardPanel` fetches four data streams in parallel on load:
+
+| KPI | Source | Description |
+|-----|--------|-------------|
+| **Pedidos hoy** | `getSalesByDateRange` → `orders` | Total orders created today (all statuses) |
+| **Ingresos hoy** | `getSalesByDateRange` → `orders` | Sum of `total` for `ENTREGADO`, `COMPLETADO`, `PAGADO` orders today |
+| **Sesiones activas** | `getAccessLogs` → `accessLogs` | Unique users whose last `accessLogs` entry today has `status = ACTIVO` |
+| **Hora pico hoy** | `getDemandByHour` → `orders` | Hour with the highest order volume today (format `HH:00`) |
+
+### Inline Alerts
+
+Two alert banners appear below the KPIs when conditions are met:
+
+- **RESERVADO orders** — links to the `pedidos` section; warns that auto-cancellation may trigger if the reservation time limit expires.
+- **Cancelled orders today** — links to `reportes-cancelados`; displays the count of orders cancelled on the current day.
+
+### Recent Orders Widget
+
+The dashboard displays the five most recent orders from today, showing order ID (truncated), buyer ID, total in Bolivianos, order status (color-coded), and creation time. The full list is accessible via the **Ver todos** link that navigates to the `pedidos` section.
+
+### Quick Access
+
+Six shortcuts are available directly from the dashboard:
+
+| Label | Section key |
+|-------|-------------|
+| Pedidos | `pedidos` |
+| Reportes | `reportes` |
+| Bitácora | `bitacora` |
+| Demanda | `demanda-horarios` |
+| Monitoreo | `monitoreo` |
+| Parámetros | `parametros` |
+
+---
+
+## Admin Sub-sections
+
+Every sub-section below is available within the admin panel's sidebar navigation.
+
+<CardGroup cols={2}>
+  <Card title="Dashboard" icon="gauge">
+    KPI overview: today's orders, revenue, active sessions, and peak demand hour. Default view on `/admin`.
+  </Card>
+  <Card title="Users" icon="users">
+    Manage user accounts at `/admin/users/usuarios`. Create, edit, enable/disable accounts and assign roles across the platform.
+  </Card>
+  <Card title="Categories" icon="tag">
+    Manage product categories at `/admin/categories`. Create and update the category tree consumed by the product catalog.
+  </Card>
+  <Card title="Orders" icon="shopping-bag">
+    Order reception panel (`OrderReceptionPanel`) for incoming orders, plus order history search by `orderId` via `/api/admin/order_history`.
+  </Card>
+  <Card title="Sales (Ventas)" icon="chart-line">
+    Daily sales charts (`DailySales`) and top-selling products (`TopSellingProducts`) ranked by `soldCount` via `/api/admin/top_products`.
+  </Card>
+  <Card title="Demand Analysis" icon="clock">
+    `DemandPanel` shows hourly order distribution for any date range. Powered by `getDemandByHour` over the `orders` collection.
+  </Card>
+  <Card title="Messenger Performance" icon="person-running">
+    Per-courier delivery KPIs: total deliveries, average delivery time in minutes, and recent completed deliveries. Sourced from `messengerPerformanceService`.
+  </Card>
+  <Card title="Courier Sessions" icon="calendar-check">
+    Session validation panel at `/api/admin/courier_sessions`. Admins review `messenger_shift_closures` documents and approve or reject them.
+  </Card>
+  <Card title="Analytics" icon="chart-bar">
+    Sales reports, top products, demand trends, cancelled order reports, seller activity logs, and paginated order lists.
+  </Card>
+  <Card title="Reconciliation" icon="scale-balanced">
+    `PaymentReconciliationPanel` cross-references delivered orders against the `payments` collection and flags discrepancies.
+  </Card>
+  <Card title="Monitoring" icon="eye">
+    `SellerActivityPanel` streams the `sellerActivityLogs` collection — every status transition made by sellers on orders.
+  </Card>
+  <Card title="Reports" icon="file-lines">
+    `CancelledOrdersReport` summarises cancelled orders by period (day / week / month) including cancellation reasons.
+  </Card>
+  <Card title="Audit" icon="clipboard-list">
+    `AccessLogPanel` displays the `accessLogs` collection — every LOGIN and LOGOUT event with user, role, and timestamp.
+  </Card>
+  <Card title="Settings" icon="sliders">
+    `ConfigPanel` reads and writes the singleton `settings/config` document. Currently exposes `reservationTimeLimit` (minutes).
+  </Card>
+  <Card title="Database Management" icon="database">
+    `OrdersManagementPanel` with `EditOrderModal` and `DeleteOrderModal` for direct order document editing and deletion via `ordersAdminService`.
+  </Card>
+</CardGroup>
+
+<Warning>
+  Only users with the `admin` role can validate courier sessions (approve/reject `messenger_shift_closures`) and reconcile payments in the `PaymentReconciliationPanel`. No other role has write access to these operations.
+</Warning>
+
+## Order Status Reference
+
+The dashboard and order panels use the following status color mapping:
+
+| Status | Meaning |
+|--------|---------|
+| `CREADO` | Order placed, not yet reserved |
+| `RESERVADO` | Reserved by a seller; subject to time-limit cancellation |
+| `CONFIRMADO` | Confirmed by seller |
+| `EMPAQUETADO` | Packed and ready |
+| `LISTO` | Ready for pickup by courier |
+| `ASIGNADO` | Assigned to a courier |
+| `ENTREGADO` | Successfully delivered |
+| `COMPLETADO` | Completed (seeder/legacy) |
+| `PAGADO` | Paid (seeder/legacy) |
+| `CANCELADO` | Cancelled |

@@ -1,0 +1,263 @@
+---
+title: "Track and Manage Your SansiStore Orders"
+sidebarTitle: "Orders"
+description: "Buyers can view order history, check delivery status, and receive notifications at every step of the SansiStore order lifecycle."
+---
+
+Once a buyer confirms their cart, SansiStore creates an order record in Firestore and begins tracking it through a multi-stage lifecycle. The order history dashboard at `/mis-pedidos` gives buyers a live view of all their purchases, lets them confirm delivery reception, and provides access to return requests — all protected by the `comprador` role guard.
+
+## Order History Dashboard (`/mis-pedidos`)
+
+The `/mis-pedidos` page renders `<MyOrdersDashboard>` (`src/features/orders/components/MyOrdersDashboard.tsx`), which is wrapped in a `<RouteGuard>` requiring the `comprador` role. The component subscribes to the buyer's orders in real time via `subscribeToMyOrders()` and fetches return requests with `getMyReturns()`.
+
+```astro
+// src/pages/mis-pedidos.astro
+<RouteGuard client:load allowedRoles={['comprador']} roleName="Comprador">
+  <MyOrdersDashboard client:load />
+</RouteGuard>
+```
+
+The dashboard header shows three summary counters:
+
+| Counter | Value |
+|---|---|
+| **Pedidos** | Total order count |
+| **Activos** | Orders in `CREADO`, `ASIGNADO`, `RESERVADO`, `PENDIENTE`, `EMPAQUETADO`, `LISTO`, or `EN CAMINO` |
+| **Devoluciones** | Total return request count |
+
+A tab bar switches between the **Pedidos** list (rendered by `<OrderList>`) and the **Devoluciones** list (rendered by `<ReturnCard>` items).
+
+### Real-Time Delivery Notification
+
+When an order's status transitions to `ENTREGADO` (or `deliveryStatus` becomes `DELIVERED`) while the buyer has the page open, a toast notification slides in from the top-right corner:
+
+```
+✅ Tu pedido fue entregado
+   Pedido 3dg-zjs
+```
+
+This is driven by tracking the previous delivery state across `subscribeToMyOrders()` snapshots using a `Map<orderId, wasDelivered>` ref.
+
+---
+
+## Order Detail Page (`/mis-pedidos/[id]`)
+
+Clicking any order card navigates to `/mis-pedidos/[id]`, which renders `<MyOrderDetailView>`. The detail view shows:
+
+- Order ID (friendly label from `parseOrderId()`)
+- Delivery address and location
+- All `orderItems` (product name, unit price, quantity, subtotal)
+- Order total
+- Status badges for order status, payment status, and delivery status
+- Buyer reception confirmation button (when status is `ENTREGADO`)
+- Return request initiation (via `createReturnRequest()`)
+
+---
+
+## Order Lifecycle
+
+Orders progress through a set of statuses defined in `OrderStatus` (`src/features/orders/types.ts`). The primary buyer-visible flow is:
+
+<Steps>
+  <Step title="CREADO">
+    Order is placed by the buyer. Stock is reserved (`stockReserved += quantity`) in the `inventory` collection. A `payments` document is created with `status: 'PENDIENTE'`.
+  </Step>
+  <Step title="RESERVADO">
+    A seller has claimed the order and begun preparation. `stockAvailable` is decremented for each item.
+  </Step>
+  <Step title="EMPAQUETADO / LISTO">
+    The order has been packed and is ready for courier pickup.
+  </Step>
+  <Step title="ASIGNADO / EN CAMINO">
+    A courier has accepted and is en route to the delivery address.
+  </Step>
+  <Step title="ENTREGADO">
+    The courier has delivered the order. The buyer can confirm reception, which transitions the order to `COMPLETADO` and sets `buyerReceptionConfirmed: true`.
+  </Step>
+  <Step title="PAGADO">
+    Payment has been validated by the seller. Inventory is permanently decremented (`stockTotal -= quantity`, `stockReserved -= quantity`).
+  </Step>
+</Steps>
+
+---
+
+## Status Reference
+
+<AccordionGroup>
+  <Accordion title="CREADO — Order placed">
+    The initial status set by `createOrder()`. The order exists in Firestore and stock has been reserved, but no seller has claimed it yet.
+  </Accordion>
+  <Accordion title="RESERVADO — Claimed by seller">
+    Set by `reserveOrder()`. The seller has accepted the order; `stockAvailable` is reduced transactionally. The buyer's order card updates in real time.
+  </Accordion>
+  <Accordion title="EMPAQUETADO — Packed">
+    The order has been prepared and packed, awaiting courier assignment.
+  </Accordion>
+  <Accordion title="LISTO — Ready for pickup">
+    Set by `readyOrder()`. The courier can now pick up the order from the seller.
+  </Accordion>
+  <Accordion title="ASIGNADO / ACEPTADO — Courier assigned">
+    A delivery has been created and assigned to a courier. The courier has accepted the delivery.
+  </Accordion>
+  <Accordion title="EN CAMINO — In transit">
+    The courier is actively delivering the order to the buyer's address.
+  </Accordion>
+  <Accordion title="ENTREGADO — Delivered">
+    The courier has marked the delivery as completed. The buyer sees a toast notification and can confirm reception.
+  </Accordion>
+  <Accordion title="CANCELADO — Cancelled">
+    Set by `cancelOrder()`. Requires an `incidentReason` string. Stock is restored transactionally: `stockAvailable += quantity`, `stockReserved -= quantity`.
+  </Accordion>
+  <Accordion title="NO ENTREGADO — Failed delivery">
+    The courier could not complete the delivery. An `incidentReason` and optional `incidentNotes` are recorded.
+  </Accordion>
+  <Accordion title="DEVUELTO — Returned">
+    The buyer initiated a return after delivery. Set by `returnOrder()`.
+  </Accordion>
+  <Accordion title="RECHAZADO — Rejected">
+    Set by `rejectOrder()`. Requires an `incidentReason`.
+  </Accordion>
+  <Accordion title="PAGADO — Payment validated">
+    Set by `paidOrder()` after the seller confirms receipt of payment. `stockTotal` and `stockReserved` are decremented in a transaction. Only deliverd orders can be moved to this status.
+  </Accordion>
+  <Accordion title="CERRADO — Closed">
+    Terminal state for fully resolved orders.
+  </Accordion>
+  <Accordion title="paymentStatus — Payment tracking">
+    Tracked separately from order status. Values: `PENDIENTE` (awaiting payment), `PAGADO` (payment confirmed by seller). Stored both on the `orders` document and the linked `payments` document.
+  </Accordion>
+  <Accordion title="deliveryStatus — Delivery tracking">
+    Set by the delivery service. Values include `DELIVERED`, `delivered`, and custom courier-set states. Checked alongside `status === 'ENTREGADO'` to determine buyer reception eligibility.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Real-Time Subscription
+
+`subscribeToMyOrders()` opens a Firestore `onSnapshot` listener scoped to the authenticated buyer:
+
+```ts
+// src/features/orders/services/ordersService.ts
+export function subscribeToMyOrders(
+  userId: string,
+  onUpdate: (orders: Order[]) => void,
+  onError?: (error: Error) => void
+): Unsubscribe {
+  const q = query(
+    collection(db, 'orders'),
+    where('buyerId', '==', userId),
+    orderBy('createdAt', 'desc')
+  );
+  return onSnapshot(q, async (querySnapshot) => {
+    const orders = await processQuerySnapshot(querySnapshot);
+    onUpdate(orders);
+  }, onError);
+}
+```
+
+`processQuerySnapshot()` performs parallel fetches of related `locations`, `users`, and `deliveries` documents, then fetches each order's `orderItems` subcollection, resulting in fully hydrated `Order` objects.
+
+---
+
+## Firestore Data Model
+
+### `orders` collection
+
+| Field | Type | Description |
+|---|---|---|
+| `orderId` | `string` | UUID v7 + z-base-32 label (document ID) |
+| `secret` | `string` | 4-digit PIN for anonymous order lookup |
+| `buyerId` | `string` | Firebase Auth UID of the buyer |
+| `sellerId` | `string \| null` | UID of the seller who claimed the order |
+| `customerName` | `string` | Buyer's display name at time of order |
+| `customerPhone` | `string` | Buyer's phone number |
+| `address` | `string` | `label` from the selected `Location` document |
+| `status` | `OrderStatus` | Current order status (see status reference above) |
+| `total` | `number` | Total order amount in Bolivianos |
+| `locationId` | `string` | Reference to `locations` collection |
+| `paymentStatus` | `string` | `PENDIENTE` or `PAGADO` |
+| `deliveryStatus` | `string \| null` | Set by the delivery/courier service |
+| `paymentId` | `string` | Same as `orderId`; used as `payments` document ID |
+| `incidentReason` | `string \| null` | Required for `CANCELADO` / `RECHAZADO` / `NO ENTREGADO` |
+| `incidentNotes` | `string \| null` | Optional extra detail for incidents |
+| `buyerReceptionConfirmed` | `boolean` | Set `true` when buyer confirms delivery |
+| `createdAt` | `Timestamp` | Order creation time |
+| `updatedAt` | `Timestamp` | Last modification time |
+
+### `orders/{orderId}/orderItems` subcollection
+
+| Field | Type | Description |
+|---|---|---|
+| `itemId` | `string` | UUID v7 (document ID) |
+| `productId` | `string` | Reference to `products` collection |
+| `productName` | `string` | Product name captured at order time |
+| `unitPrice` | `number` | Price per unit at time of order |
+| `quantity` | `number` | Number of units ordered |
+| `subtotal` | `number` | `unitPrice × quantity`, rounded to 2 decimal places |
+
+### `returns` collection
+
+```ts
+interface ReturnRequest {
+  id?: string;
+  orderId: string;
+  buyerId: string;
+  productId?: string;
+  productName?: string;
+  items?: ReturnItem[];     // array of { productId, productName, quantity }
+  reason: string;
+  description?: string;
+  status: 'pending_review' | 'approved' | 'rejected';
+  createdAt: Timestamp;
+}
+```
+
+Return reasons recognized by the system:
+
+| Key | Label |
+|---|---|
+| `damaged` | Producto dañado |
+| `wrong_product` | Producto incorrecto |
+| `unwanted` | No deseado |
+| `other` | Otro |
+
+---
+
+## Returns Page (`/my-returns`)
+
+The `<MyReturnsView>` component displays return requests fetched from `getMyReturns()`:
+
+```ts
+// src/features/orders/services/ordersService.ts
+export async function getMyReturns(userId: string): Promise<ReturnRequest[]> {
+  const q = query(
+    collection(db, 'returns'),
+    where('buyerId', '==', userId),
+    orderBy('createdAt', 'desc')
+  );
+  // ...
+}
+```
+
+Each return is rendered in a `<ReturnCard>` showing the order ID, reason, description, and current review status (`pending_review`, `approved`, or `rejected`).
+
+<Note>
+  Return requests can only be initiated for orders with `status === 'ENTREGADO'` or `deliveryStatus === 'DELIVERED'`. The **Confirmar recepción** action must be completed before initiating a return.
+</Note>
+
+---
+
+## End-to-End Tests
+
+Order pages are covered by Playwright tests in `tests/orders/my-orders.spec.ts`:
+
+```
+Mis pedidos - comprador (Ana Mamani)  [serial]
+  ✓ el menu lleva a Mi Perfil y de ahi a Mis pedidos
+      — /mi-perfil → "Ver mis compras" link → /mis-pedidos
+  ✓ muestra el encabezado y las tarjetas de pedidos de Ana
+      — heading "Mis pedidos y devoluciones" visible
+      — failed order card visible with "No entregado" status and address
+      — two additional order links visible by known order IDs
+```

@@ -1,0 +1,130 @@
+---
+title: "Payment Reconciliation and Audit in SansiStore"
+sidebarTitle: "Reconciliation"
+description: "Admins reconcile courier cash collections against expected order totals, verify payments, and close courier sessions in SansiStore."
+---
+
+Payment reconciliation in SansiStore is the process by which administrators verify that the cash or digital payments collected by couriers match the order totals registered in the system. The `PaymentReconciliationPanel` provides a real-time, filterable view of delivered orders that have discrepancies against the `payments` collection. Alongside reconciliation, a per-order payment audit trail is maintained in the immutable `paymentActivityLogs` collection.
+
+## PaymentReconciliationPanel
+
+The panel is powered by `listenPaymentReconciliation` from `paymentReconciliationService.ts`, which opens two simultaneous Firestore `onSnapshot` listeners — one on `orders` and one on `payments` — and calls `buildReconciliationItems` whenever either collection changes.
+
+Only **delivered orders** are included in reconciliation. An order is considered delivered when its `deliveryStatus` normalizes to `"delivered"` or its `status` normalizes to `"entregado"`. For each delivered order the service looks up a matching payment document by `orderId` and classifies the discrepancy:
+
+| Issue Type | Label | Condition |
+|------------|-------|-----------|
+| `missing-payment` | Sin pago registrado | No `payments` document found for the order |
+| `pending-payment` | Pago no cobrado | Payment exists but status is not in the collected set |
+| `amount-mismatch` | Monto diferente | Payment collected but `order.total - payment.amount > 0.01` |
+
+**Collected payment statuses** (case/accent-insensitive): `cobrado`, `pagado`, `paid`, `verified`, `verificado`, `validado`.
+
+### PaymentReconciliationItem Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `orderId` | `string` | Order identifier |
+| `customerName` | `string` | Customer display name |
+| `customerPhone` | `string` | Customer phone number |
+| `orderTotal` | `number` | Expected amount (from `orders.total`) |
+| `paymentAmount` | `number \| null` | Actual collected amount (`null` if no payment record) |
+| `difference` | `number` | `orderTotal - paymentAmount` (0 if no payment) |
+| `orderStatus` | `string` | Order status string |
+| `deliveryStatus` | `string` | Delivery status string |
+| `paymentStatus` | `string` | Payment status string |
+| `paymentMethod` | `string` | Payment method string |
+| `deliveredAt` | `Date \| null` | Delivery timestamp |
+| `updatedAt` | `Date \| null` | Last update timestamp (fallback sort key) |
+| `issueType` | `ReconciliationIssueType` | Classification of the discrepancy |
+
+Results are sorted by `deliveredAt` descending (falling back to `updatedAt`). The panel updates automatically as Firestore data changes — no manual refresh is needed.
+
+---
+
+## Reconciliation Workflow
+
+<Steps>
+  <Step title="Courier closes their session">
+    At the end of their shift the courier submits a session closure from the courier portal. This creates a document in `messenger_shift_closures` with `status: 'closed'`, a `summary.totalCollected` amount, and snapshots of completed, pending, and incident orders.
+  </Step>
+  <Step title="Admin opens the reconciliation panel">
+    The admin navigates to the **Reconciliation** section of `/admin`. The `PaymentReconciliationPanel` loads all delivered orders with discrepancies from Firestore in real time.
+  </Step>
+  <Step title="Admin reviews total collected vs. expected">
+    For each flagged order the panel shows `orderTotal` (expected), `paymentAmount` (collected), and `difference`. The summary cards at the top display aggregate counts: total inconsistencies, missing payments, uncollected payments, and amount mismatches.
+  </Step>
+  <Step title="Admin validates or disputes the courier session">
+    For session-level validation, the admin opens the **Courier Sessions** panel and calls `PATCH /api/admin/courier_sessions` with `{ closureId, action: "approve" | "reject", rejectionReason? }`. The `sessionsService.validateShiftClosure` function handles the request.
+  </Step>
+  <Step title="Session status is updated">
+    On approval the `messenger_shift_closures` document is updated to `status: 'validated'`, and `validatedBy` (admin UID), `validatedAt` (server timestamp), and `validatedByName` are written. On rejection, `status` becomes `'rejected'` and `rejectionReason` is stored. A session already in `validated` or `rejected` state cannot be modified (API returns `409`).
+  </Step>
+</Steps>
+
+---
+
+## Payment Methods and Statuses
+
+SansiStore supports four payment methods:
+
+| Constant | Label |
+|----------|-------|
+| `EFECTIVO` | Efectivo (cash) |
+| `QR` | QR payment |
+| `TRANSFERENCIA` | Bank transfer |
+| `TARJETA` | Card payment |
+
+Payments in the `payments` collection follow a lifecycle:
+
+```
+PENDIENTE  →  VERIFICADO
+           →  RECHAZADO
+```
+
+Verification writes `verifiedBy` (admin UID) and `verifiedAt` (timestamp) to the payment document. The `order_history` API surfaces these fields in the payment sub-object returned per order.
+
+---
+
+## PaymentAuditPanel (per-order audit)
+
+The `PaymentAuditPanel` component in `pedidos/payment-audit/` subscribes to the `paymentActivityLogs` collection via `escucharHistorialCobros` from `paymentAuditService.ts`. It shows the per-order history of every collection event — useful for tracing disputed charges back to the collector.
+
+**Filter support:** `orderId`, `collectedById`, `paymentMethod` (`EFECTIVO | QR | TRANSFERENCIA | TARJETA | ALL`), and `startDate`/`endDate`.
+
+`escucharEncargadosCobros` derives the unique collector list from existing log entries, enabling a "filter by collector" dropdown without an extra `users` query.
+
+---
+
+## `paymentActivityLogs` Collection (Immutable Audit Trail)
+
+Every payment collection event — regardless of whether it was made by a seller, courier, or admin — is appended to `paymentActivityLogs` by `registrarActividadCobro`.
+
+### Document Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `orderId` | `string` | Associated order ID |
+| `collectedBy` | `PaymentCollector` | Object: `{ id, nombre, email, rol }` |
+| `collectedById` | `string` | Collector UID (legacy flat field) |
+| `collectedByName` | `string` | Collector display name (legacy flat field) |
+| `collectedByEmail` | `string` | Collector email (legacy flat field) |
+| `collectedByRole` | `'VENDEDOR' \| 'MENSAJERO' \| 'ADMIN'` | Collector role at time of event |
+| `amount` | `number` | Amount collected |
+| `paymentMethod` | `PaymentMethod` | One of `EFECTIVO`, `QR`, `TRANSFERENCIA`, `TARJETA` |
+| `status` | `PaymentStatus` | `PENDIENTE`, `VERIFICADO`, or `RECHAZADO` |
+| `timestamp` | `Timestamp` | Server-side Firestore timestamp |
+
+<Warning>
+  `paymentActivityLogs` is a write-once collection. Firestore security rules set `allow update: if false` and `allow delete: if false` on these documents. Only admins can read the collection. New entries must pass schema validation; partial or malformed writes are rejected. Never attempt to modify or delete an existing audit log entry — treat it as an immutable ledger.
+</Warning>
+
+---
+
+## Database Management
+
+For edge cases that require direct intervention, the `OrdersManagementPanel` (under **Database Management** in the admin sidebar) provides `EditOrderModal` and `DeleteOrderModal` components backed by `ordersAdminService.ts`. These operations bypass the normal order state machine and should only be used by admins to correct data integrity issues.
+
+<Note>
+  Direct order edits and deletions are logged server-side. Use this panel only when the standard seller/courier workflow cannot resolve the issue, and document the reason for the change in your internal ticketing system.
+</Note>

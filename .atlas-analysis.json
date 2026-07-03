@@ -1,23 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "SansiStore",
+  "projectType": "saas",
+  "projectName": "SansiStore",
+  "projectDescription": "SansiStore is a full-stack e-commerce web application for UMSS (Universidad Mayor de San Simón) built with Astro, React, Firebase, and Tailwind CSS, supporting buyer, seller, courier, inventory operator, and admin roles.",
   "theme": "almond",
-  "colors": {
-    "primary": "#88b04b",
-    "light": "#fffbf4",
-    "dark": "#0a0b0d"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/ProcesosAgilesUMSS/sansistore"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/ProcesosAgilesUMSS/sansistore"
-    }
-  },
+  "primaryColor": "#88b04b",
+  "lightColor": "#fffbf4",
+  "darkColor": "#0a0b0d",
   "navigation": {
     "tabs": [
       {
@@ -108,5 +96,28 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Multi-role authentication via Firebase Auth (Google SSO, @umss.edu domain restricted)",
+    "Product catalog with categories, search, offers, and reviews",
+    "Cart, checkout, and order tracking for buyers",
+    "Seller portal for order reception, packaging, and dispatch management",
+    "Courier mobile-friendly delivery flow with session management and cash reconciliation",
+    "Inventory management with stock entries, exits, movements, and alerts",
+    "Admin dashboard with analytics, audit logs, user management, and payment reconciliation",
+    "PWA support (installable, offline-ready) with Vercel deployment",
+    "Firestore-backed real-time data with local emulator support for development",
+    "E2E tests with Playwright and unit tests with Vitest"
+  ],
+  "publicApiSurface": [
+    "GET /api/admin/order_history",
+    "GET /api/admin/orders_list",
+    "GET /api/admin/courier_sessions",
+    "GET /api/admin/top_products",
+    "GET /api/seller/pending-orders",
+    "GET /api/seller/daily-collections",
+    "GET /api/users",
+    "Firebase Auth (Google OAuth, @umss.edu domain restriction)",
+    "Firestore collections: users, products, categories, orders, orderItems, deliveries, payments, inventory, inventoryMovements, reviews, cartItems, favorites, notifications, courierSessions, accessLogs, sellerActivityLogs, settings"
+  ]
 }

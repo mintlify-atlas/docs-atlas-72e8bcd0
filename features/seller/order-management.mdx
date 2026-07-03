@@ -1,0 +1,313 @@
+---
+title: "Seller Order Management Workflow in SansiStore"
+sidebarTitle: "Order Management"
+description: "Sellers process incoming orders through a multi-step workflow: confirm, package, assign couriers, handle incidents, and track history."
+---
+
+The **vendedor** (seller) role in SansiStore owns the full lifecycle of every order — from the moment a buyer checks out to final delivery or cancellation. All seller pages live under the `/seller/*` path and are protected by Firebase Auth role checks; any authenticated user without the `vendedor` role is denied access. The sidebar navigation is driven by `sellerNavGroups` and `sections` constants, grouping pages into **Pedidos**, **Registrar**, and **Operación** sections.
+
+## Order Lifecycle Overview
+
+Every order in Firestore moves through a strict sequence of statuses defined in `OrderStatus`:
+
+```ts
+// src/features/seller/types.ts
+export type OrderStatus =
+  | 'CREADO'
+  | 'RESERVADO'
+  | 'PENDIENTE'
+  | 'EMPAQUETADO'
+  | 'LISTO'
+  | 'ASIGNADO'
+  | 'EN CAMINO'
+  | 'ENTREGADO'
+  | 'PAGADO'
+  | 'CANCELADO'
+  | 'NO ENTREGADO'
+  | 'DEVUELTO'
+  | 'CERRADO'
+  | 'RECHAZADO'
+  | 'PENDIENTE REASIGNACION'
+  | 'PENDIENTE-ASIGNACION'
+  | 'ACEPTADO';
+```
+
+The happy path runs:
+
+> `CREADO` → `RESERVADO` → `EMPAQUETADO` → `LISTO` → `ASIGNADO` → `EN CAMINO` → `ENTREGADO` / `PAGADO`
+
+Exceptions branch off into `NO ENTREGADO`, `RECHAZADO`, or `CANCELADO`.
+
+## Seller Portal Pages
+
+<CardGroup cols={2}>
+  <Card title="Created Orders" icon="clipboard-list" href="https://sansistore-umss.vercel.app/seller/created-orders">
+    New orders in status `CREADO` awaiting seller acceptance. The seller reviews each order and reserves it, transitioning it to `RESERVADO`.
+  </Card>
+  <Card title="Pending Orders" icon="hourglass" href="https://sansistore-umss.vercel.app/seller/pending-orders">
+    Orders in the `PENDIENTE` state that are currently being processed. Fetched from `/api/seller/pending-orders` with a bearer token — requires the `vendedor` role.
+  </Card>
+  <Card title="Reservations" icon="bookmark" href="https://sansistore-umss.vercel.app/seller/reservations">
+    Orders in `RESERVADO` status with stock reserved in inventory. The seller confirms stock and prepares items for packaging.
+  </Card>
+  <Card title="Packaged Orders" icon="package" href="https://sansistore-umss.vercel.app/seller/packaged-orders">
+    Orders in `EMPAQUETADO` state. The seller verifies the package and marks it **Listo** to advance the order to the `LISTO` status.
+  </Card>
+  <Card title="Ready Orders" icon="package-check" href="https://sansistore-umss.vercel.app/seller/ready-orders">
+    Orders in `LISTO` status, fully packaged and waiting for a courier (mensajero) to be assigned. This page opens the `AssignMessengerModal`.
+  </Card>
+  <Card title="Failed Orders" icon="package-x" href="https://sansistore-umss.vercel.app/seller/failed-orders">
+    Orders in `NO ENTREGADO` status. The seller decides to **restart** the order (back to `RESERVADO`) or **cancel** it (to `CANCELADO`).
+  </Card>
+  <Card title="Undelivered Orders" icon="truck" href="https://sansistore-umss.vercel.app/seller/undelivered-orders">
+    Also shows orders in `NO ENTREGADO`. The `useUndeliveredOrderDecision` hook exposes `restartOrder` and `cancelOrder` actions; restarting re-reserves inventory when `stockRestored` is `true`.
+  </Card>
+  <Card title="Rejected Orders" icon="ban" href="https://sansistore-umss.vercel.app/seller/rejected-orders">
+    Orders with status `RECHAZADO`. These are orders where the seller registered a delivery failure reason via `registerDeliveryFailureReason`.
+  </Card>
+</CardGroup>
+
+<Card title="Order History" icon="file-text" href="https://sansistore-umss.vercel.app/seller/order-history">
+  A complete, paginated audit log of all orders for the authenticated seller, sorted by `updatedAt` descending. Used for reconciliation and dispute resolution.
+</Card>
+
+## Core Seller Workflow
+
+<Steps>
+  <Step title="Receive a Created Order">
+    The buyer places an order; Firestore writes a document to the `orders` collection with `status: 'CREADO'` and `sellerId` set to the seller's UID. The seller sees it on `/seller/created-orders`, powered by `subscribeConfirmedOrders`.
+
+    ```ts
+    // src/features/seller/services/sellerReservedOrdersService.ts
+    export function subscribeConfirmedOrders(
+      db: Firestore,
+      sellerId: string,
+      onData: (orders: Order[]) => void,
+      onError?: (err: Error) => void,
+    ): Unsubscribe {
+      const q = query(
+        collection(db, 'orders'),
+        where('sellerId', '==', sellerId),
+        where('status', '==', 'CREADO'),
+      );
+      // ...
+    }
+    ```
+  </Step>
+
+  <Step title="Reserve the Order">
+    The seller clicks **Reservar**. `reserveConfirmedOrder` runs a Firestore transaction that checks `status === 'CREADO'` and updates it to `RESERVADO`, stamping `reservedAt`. Seller activity is logged via `registrarActividadVendedor` (HU #160).
+
+    ```ts
+    tx.update(orderRef, {
+      status: 'RESERVADO',
+      sellerId,
+      reservedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    ```
+  </Step>
+
+  <Step title="Package the Order">
+    Once items are physically packed, the order transitions to `EMPAQUETADO`. The `/seller/packaged-orders` page (`PackagedOrdersPanel`) lists all such orders and lets the seller confirm they are ready.
+  </Step>
+
+  <Step title="Mark Order as Ready">
+    The seller clicks **Marcar como listo** on a packaged order. `markOrderReady` validates `status === 'EMPAQUETADO'` inside a transaction then updates it to `LISTO`.
+
+    ```ts
+    // src/features/seller/services/markOrderReady.ts
+    export const markOrderReady = async (
+      db: Firestore,
+      orderId: string,
+      sellerId: string,
+    ): Promise<void> => {
+      await runTransaction(db, async (tx) => {
+        // ...
+        if (current.status !== 'EMPAQUETADO') throw new Error(/* ... */);
+        tx.update(orderRef, {
+          status: 'LISTO',
+          sellerId,
+          updatedAt: serverTimestamp(),
+        });
+      });
+    };
+    ```
+
+    The `useMarkOrderReady` hook wraps this and exposes `markAsReady`, `isLoading`, `isSuccess`, and `error` to the UI.
+  </Step>
+
+  <Step title="Assign a Courier">
+    With the order in `LISTO`, the seller opens the **Assign Messenger Modal** on `/seller/ready-orders` and picks an available mensajero. `assignCourierToDelivery` runs an atomic transaction: it creates a new document in the `deliveries` collection and updates the order's `status` to `ASIGNADO`.
+
+    ```ts
+    // src/features/seller/services/assignCourierToDelivery.ts
+    tx.set(deliveryRef, {
+      orderId,
+      courierId,
+      status: 'assigned',
+      deliveryCode: `DEL-${Date.now().toString(36).toUpperCase()}`,
+      attemptNumber: 1,
+      incidentReason: null,
+      evidenceUrl: null,
+      failureReason: null,
+      amountCollected: null,
+      customerConfirmed: false,
+      createdAt: serverTimestamp(),
+      assignedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    ```
+  </Step>
+
+  <Step title="Courier Delivers the Order">
+    The courier picks up and delivers. On success the order reaches `ENTREGADO` or `PAGADO`. On failure it moves to `NO ENTREGADO`, surfacing on `/seller/failed-orders` and `/seller/undelivered-orders`.
+  </Step>
+
+  <Step title="Handle Delivery Outcome">
+    For failed/undelivered orders the seller chooses one of two actions via `useFailedOrderDecision` or `useUndeliveredOrderDecision`:
+
+    - **Restart** — returns the order to `RESERVADO` and re-reserves stock if `stockRestored` is `true`.
+    - **Cancel** — sets status to `CANCELADO`, releases reserved inventory, and records the cancellation reason in `incidentReason`.
+  </Step>
+</Steps>
+
+## Order Detail Page
+
+Each order has a dedicated page at `/seller/orders/[id]` that shows the full `Order` object including the `items` subcollection. The `getOrders` service (`getOredrs`) uses `onSnapshot` to keep the list live and enriches each record with buyer info, location label, and order items:
+
+```ts
+// src/features/seller/services/getOrders.ts
+export const getOrders = ({ status, ordby, db, sellerId, onData, onError }: Params): Unsubscribe => {
+  const qOrders = query(
+    collection(db, 'orders'),
+    where('sellerId', '==', sellerId),
+    where('status', '==', status),
+    orderBy('updatedAt', ordby),
+  );
+  return onSnapshot(qOrders, async (snap) => {
+    const orders = snap.docs.map((d) => docToOrder(d.id, d.data() as OrderDoc));
+    const enriched = await enrichOrdersWithData(db, orders);
+    onData(enriched);
+  });
+};
+```
+
+<Note>
+  The `enrichOrdersWithData` function batches lookups for buyers (`users` collection) and locations (`locations` collection) and reads `orderItems` subcollections in parallel, minimising round-trips.
+</Note>
+
+## Firestore Order Schema
+
+The `orders` collection document (`OrderDoc`) has the following fields:
+
+```ts
+// src/features/seller/types.ts
+export type OrderDoc = {
+  orderId: string;
+  buyerId: string;
+  sellerId: string;
+  status: OrderStatus;
+  total: number;
+  locationId: string;
+  paymentId: string | null;
+  paymentStatus: string;
+  deliveryId: string | null;
+  deliveryCode: string | null;
+  deliveryStatus: string | null;
+  incidentReason: string | null;
+  deliveryFailureReason?: string | null;
+  deliveryFailureDescription?: string | null;
+  confirmedAt: Date | null;
+  cancelledAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+```
+
+The enriched `Order` type extends `OrderDoc` with resolved fields:
+
+| Field | Source | Description |
+|---|---|---|
+| `buyerName` | `users/{buyerId}.displayName` | Resolved buyer display name |
+| `buyerEmail` | `users/{buyerId}.email` | Buyer email address |
+| `buyerInstitutionalId` | `users/{buyerId}.institutionalId` | UMSS institutional ID |
+| `locationLabel` | `locations/{locationId}.label` | Human-readable delivery location |
+| `locationType` | `locations/{locationId}.type` | Location category |
+| `items` | `orders/{orderId}/orderItems` subcollection | Array of `OrderItem` |
+
+Each `OrderItem` includes `itemId`, `productId`, `productName`, `unitPrice`, `quantity`, and `subtotal`.
+
+## Daily Collections
+
+The `/seller/daily-collections` page (rendered by `DailyCollectionsPanel`) gives the seller a financial summary of cash-on-delivery payments collected by couriers on a given day. It calls `fetchDailyCollections` from `dailyCollectionsService.ts`:
+
+```ts
+// src/features/seller/services/dailyCollectionsService.ts
+export async function fetchDailyCollections(
+  date?: string,
+): Promise<DailyCollectionsSummary> {
+  const headers = await getAuthHeader();
+  const query = date ? `?date=${encodeURIComponent(date)}` : '';
+  const response = await fetch(`/api/seller/daily-collections${query}`, { headers });
+  // ...
+  return response.json() as Promise<DailyCollectionsSummary>;
+}
+```
+
+The summary surface three key metrics:
+
+<CardGroup cols={3}>
+  <Card title="Total cobrado" icon="dollar-sign">
+    Total cash collected across all `cash_on_delivery` orders for the selected day, formatted in BOB (Bolivianos).
+  </Card>
+  <Card title="Pedidos cobrados" icon="receipt">
+    Count of orders with payments registered by couriers on the selected date.
+  </Card>
+  <Card title="Confirmados" icon="user-check">
+    Number of orders where the buyer confirmed reception (`buyerReceptionConfirmed: true`).
+  </Card>
+</CardGroup>
+
+<Tip>
+  The date picker defaults to today in the **America/La_Paz** timezone (`UTC-4`). Sellers can navigate to any past date to review historical collections.
+</Tip>
+
+## Sidebar Navigation Groups
+
+The seller sidebar is built from `sellerNavGroups` defined in `src/features/seller/constants/navGroups.ts`:
+
+```ts
+export const sellerNavGroups: NavGroup[] = [
+  {
+    title: 'Pedidos',
+    items: [
+      { label: 'Mis pedidos',           href: '/seller/orders' },
+      { label: 'Pedidos creados',        href: '/seller/created-orders' },
+      { label: 'Pedidos listos',         href: '/seller/ready-orders' },
+      { label: 'Pedidos rechazados',     href: '/seller/rejected-orders' },
+      { label: 'Pedidos no entregados',  href: '/seller/undelivered-orders' },
+      { label: 'Historial de pedidos',   href: '/seller/order-history' },
+    ],
+  },
+  {
+    title: 'Registrar',
+    items: [
+      { label: 'Registrar compra',  href: '/seller/purchase' },
+      { label: 'Registrar oferta',  href: '/seller/offers' },
+    ],
+  },
+  {
+    title: 'Operación',
+    items: [
+      { label: 'Incidencias',      href: '/seller/incidents' },
+      { label: 'Pagos registrados', href: '/seller/daily-collections' },
+      { label: 'Motivos de fallo', href: '/seller/failure-reasons' },
+    ],
+  },
+];
+```
+
+<Warning>
+  Seller activity (reserving orders, marking ready, assigning couriers) is tracked via `registrarActividadVendedor` as part of **HU #160 – Monitoreo de actividad de vendedores**. These logs are written asynchronously and will not interrupt the main workflow if they fail.
+</Warning>

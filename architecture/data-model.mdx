@@ -1,0 +1,365 @@
+---
+title: "SansiStore Firestore Data Model Reference"
+sidebarTitle: "Data Model"
+description: "Complete Firestore collection schemas for SansiStore: users, products, orders, deliveries, payments, inventory, and more."
+---
+
+SansiStore uses Cloud Firestore as its primary database — a NoSQL document store where data is organised into **collections** of **documents**. Each document is a map of typed fields. Some collections live at the top level of the database; others are **subcollections** nested directly beneath a parent document (e.g., `inventory` is a subcollection of each `products` document).
+
+The Firestore instance is hosted in `southamerica-east1` and uses English names for all collections and fields.
+
+## Collections Overview
+
+| Collection | Type | Description |
+|---|---|---|
+| `users` | Top-level | Platform accounts and their roles |
+| `locations` | Top-level | Saved delivery addresses per user |
+| `categories` | Top-level | Product category taxonomy |
+| `products` | Top-level | Product catalogue entries |
+| `inventory` | Subcollection of `products` | Stock levels per product |
+| `inventoryMovements` | Top-level | Audit trail of every stock change |
+| `reviews` | Top-level | Buyer product reviews |
+| `orders` | Top-level | Purchase orders |
+| `orderItems` | Subcollection of `orders` | Line items within an order |
+| `deliveries` | Top-level | Last-mile delivery records |
+| `payments` | Top-level | Payment registrations and verifications |
+| `courierSessions` | Top-level | Daily cash-collection sessions per courier |
+| `notifications` | Top-level | In-app notifications sent to users |
+| `settings` | Top-level | Platform-wide configuration |
+| `cartItems` | Top-level | Active shopping cart items per user |
+| `favorites` | Top-level | Saved / wishlisted products per user |
+| `accessLogs` | Top-level | Login and access audit trail |
+| `sellerActivityLogs` | Top-level | Seller order-status change audit trail |
+
+---
+
+## Collection Schemas
+
+### `users`
+
+Stores one document per registered user. The `roles` array drives all route guards and Firestore security rules.
+
+| Field | Type | Description |
+|---|---|---|
+| `uid` | string | Firebase Auth UID — matches the document ID |
+| `email` | string | User's email address |
+| `displayName` | string | Full display name from Google profile |
+| `phoneNumber` | string | Contact phone number |
+| `roles` | array\<string\> | Assigned roles: `admin`, `vendedor`, `mensajero`, `operador_inv` |
+| `institutionalId` | string | UMSS institutional identifier |
+| `isActive` | boolean | Whether the account is currently active |
+| `createdBy` | string | UID of the admin who created the account |
+| `createdAt` | timestamp | Account creation timestamp |
+
+---
+
+### `locations`
+
+Saved delivery addresses. Each document belongs to one user and can be marked as the default address for checkout.
+
+| Field | Type | Description |
+|---|---|---|
+| `locationId` | string | Document ID |
+| `userId` | string | Owner's Firebase Auth UID |
+| `label` | string | Human-readable label (e.g., "Casa", "Oficina") |
+| `type` | string | Address type (e.g., `home`, `work`) |
+| `lat` | number | Latitude coordinate |
+| `lng` | number | Longitude coordinate |
+| `isDefault` | boolean | Whether this is the user's default delivery address |
+
+---
+
+### `categories`
+
+Top-level product categories managed by admins.
+
+| Field | Type | Description |
+|---|---|---|
+| `categoryId` | string | Document ID |
+| `name` | string | Display name of the category |
+| `active` | boolean | Whether the category is visible in the catalogue |
+| `createdBy` | string | UID of the admin who created the category |
+| `createdAt` | timestamp | Creation timestamp |
+
+---
+
+### `products`
+
+The core catalogue. Each product document has an `inventory` subcollection holding its stock record.
+
+| Field | Type | Description |
+|---|---|---|
+| `productId` | string | Document ID |
+| `categoryId` | string | Reference to the parent `categories` document |
+| `name` | string | Product display name |
+| `slug` | string | URL-friendly identifier |
+| `description` | string | Full product description |
+| `price` | number | Base price in local currency |
+| `imageUrl` | string | Firebase Storage URL for the product image |
+| `active` | boolean | Whether the product is listed in the catalogue |
+| `hasOffer` | boolean | Whether a promotional offer is currently active |
+| `offerPrice` | number | Discounted price when `hasOffer` is `true` |
+| `soldCount` | number | Cumulative units sold (used for popularity sorting) |
+| `badge` | string | Optional label displayed on the product card (e.g., "Nuevo", "Oferta") |
+| `sourceUrl` | string | Optional external reference URL |
+
+**Subcollection:** `products/{productId}/inventory` — see [`inventory`](#inventory-subcollection-of-products) below.
+
+---
+
+### `inventory` *(subcollection of `products`)*
+
+One document per product, nested at `products/{productId}/inventory/{productId}`. Tracks real-time stock levels.
+
+| Field | Type | Description |
+|---|---|---|
+| `productId` | string | Matches the parent product's ID |
+| `stockTotal` | number | Total units ever received |
+| `stockAvailable` | number | Units available to sell right now |
+| `stockReserved` | number | Units held against confirmed but undelivered orders |
+| `minStock` | number | Low-stock threshold that triggers an alert |
+| `enabled` | boolean | Whether inventory tracking is active for this product |
+
+---
+
+### `inventoryMovements`
+
+An append-only audit log of every stock entry, exit, adjustment, or incident. Written by inventory operators.
+
+| Field | Type | Description |
+|---|---|---|
+| `movementId` | string | Document ID |
+| `productId` | string | Reference to the affected product |
+| `operatorId` | string | UID of the inventory operator who recorded the movement |
+| `type` | string | Movement type: entry, exit, adjustment, incident, etc. |
+| `reason` | string | Human-readable reason for the movement |
+| `quantity` | number | Number of units involved (positive for entries, negative for exits) |
+| `createdAt` | timestamp | When the movement was recorded |
+
+---
+
+### `reviews`
+
+Buyer-submitted product reviews. Moderated by admins via the `active` flag.
+
+| Field | Type | Description |
+|---|---|---|
+| `reviewId` | string | Document ID |
+| `productId` | string | Reference to the reviewed product |
+| `authorName` | string | Display name of the reviewer |
+| `rating` | number | Star rating (1–5) |
+| `comment` | string | Review text body |
+| `active` | boolean | Whether the review is publicly visible |
+| `createdAt` | timestamp | Submission timestamp |
+
+---
+
+### `orders`
+
+The central transaction record. One document per purchase, linking buyer, seller, payment, and delivery.
+
+| Field | Type | Description |
+|---|---|---|
+| `orderId` | string | Document ID |
+| `secret` | string | Short alphanumeric code used for delivery confirmation |
+| `buyerId` | string | UID of the buyer |
+| `sellerId` | string | UID of the seller managing the order |
+| `customerName` | string | Buyer's name at order time |
+| `customerPhone` | string | Buyer's phone number at order time |
+| `address` | string | Delivery address string |
+| `status` | string | Order lifecycle status (e.g., `created`, `reserved`, `packaged`, `ready`, `failed`) |
+| `incidentReason` | string | Reason text when the status reflects an incident or failure |
+| `total` | number | Total order amount in local currency |
+| `locationId` | string | Reference to the buyer's saved `locations` document |
+| `paymentStatus` | string | Payment state (e.g., `pending`, `verified`) |
+| `deliveryStatus` | string | Delivery state (e.g., `assigned`, `in_transit`, `delivered`) |
+| `deliveryId` | string | Reference to the associated `deliveries` document |
+| `paymentId` | string | Reference to the associated `payments` document |
+| `confirmedAt` | timestamp | When the order was confirmed by the seller |
+| `cancelledAt` | timestamp | When the order was cancelled (if applicable) |
+| `createdAt` | timestamp | Order creation timestamp |
+| `updatedAt` | timestamp | Last modification timestamp |
+
+**Subcollection:** `orders/{orderId}/orderItems` — see [`orderItems`](#orderitems-subcollection-of-orders) below.
+
+---
+
+### `orderItems` *(subcollection of `orders`)*
+
+Line items within a single order. Stored as a subcollection at `orders/{orderId}/orderItems/{itemId}`.
+
+| Field | Type | Description |
+|---|---|---|
+| `itemId` | string | Document ID |
+| `productId` | string | Reference to the product at purchase time |
+| `productName` | string | Product name snapshotted at order time (preserved if the product is later edited) |
+| `unitPrice` | number | Price per unit snapshotted at order time |
+| `quantity` | number | Number of units ordered |
+| `subtotal` | number | `unitPrice × quantity` |
+
+---
+
+### `deliveries`
+
+Tracks every last-mile delivery attempt from assignment through to outcome (delivered, failed, or reprogrammed).
+
+| Field | Type | Description |
+|---|---|---|
+| `deliveryId` | string | Document ID |
+| `orderId` | string | Reference to the associated order |
+| `courierId` | string | UID of the assigned courier |
+| `status` | string | Delivery status (e.g., `assigned`, `picked_up`, `in_transit`, `delivered`, `failed`, `reprogrammed`) |
+| `deliveryCode` | string | Confirmation code the buyer presents to the courier |
+| `attemptNumber` | number | Delivery attempt counter (increments on reprogramming) |
+| `incidentReason` | string | Description of any incident during delivery |
+| `evidenceUrl` | string | Firebase Storage URL for delivery confirmation photo |
+| `failureReason` | string | Reason text if the delivery failed |
+| `amountCollected` | number | Cash amount collected on delivery (cash-on-delivery orders) |
+| `customerConfirmed` | boolean | Whether the customer confirmed receipt |
+| `customerConfirmedAt` | timestamp | When the customer confirmed receipt |
+| `assignedAt` | timestamp | When the courier was assigned |
+| `pickedUpAt` | timestamp | When the courier picked up the package |
+| `inTransitAt` | timestamp | When the courier marked the delivery in transit |
+| `deliveredAt` | timestamp | When the delivery was completed |
+| `failedAt` | timestamp | When the delivery was marked as failed |
+| `reprogrammedAt` | timestamp | When the delivery was reprogrammed |
+| `newDeliveryAt` | timestamp | Scheduled date/time for the reprogrammed attempt |
+| `reprogramReason` | string | Reason for reprogramming the delivery |
+| `createdAt` | timestamp | Record creation timestamp |
+| `updatedAt` | timestamp | Last modification timestamp |
+
+---
+
+### `payments`
+
+Tracks payment registration and verification for each order.
+
+| Field | Type | Description |
+|---|---|---|
+| `paymentId` | string | Document ID |
+| `orderId` | string | Reference to the associated order |
+| `amount` | number | Payment amount |
+| `method` | string | Payment method: `EFECTIVO`, `QR`, `TRANSFERENCIA`, or `TARJETA` |
+| `status` | string | Payment status: `pending`, `verified`, or `rejected` |
+| `registeredBy` | string | UID of who registered the payment (seller or courier) |
+| `verifiedBy` | string | UID of who verified the payment (admin or seller) |
+| `registeredAt` | timestamp | When the payment was first recorded |
+| `verifiedAt` | timestamp | When the payment was verified |
+| `updatedAt` | timestamp | Last modification timestamp |
+
+---
+
+### `courierSessions`
+
+Represents a courier's daily cash-collection session, used for end-of-day reconciliation.
+
+| Field | Type | Description |
+|---|---|---|
+| `sessionId` | string | Document ID |
+| `courierId` | string | UID of the courier |
+| `totalCollected` | number | Total cash collected during the session |
+| `deliveriesCount` | number | Number of deliveries completed in the session |
+| `expectedAmount` | number | Amount expected based on confirmed deliveries |
+| `differenceAmount` | number | `totalCollected − expectedAmount` (positive = overage, negative = shortage) |
+| `status` | string | Session status: `open`, `closed`, or `validated` |
+| `openedAt` | timestamp | When the session was opened |
+| `closedAt` | timestamp | When the courier closed the session |
+| `validatedBy` | string | UID of the admin or seller who validated the session |
+| `validatedAt` | timestamp | When the session was validated |
+| `updatedAt` | timestamp | Last modification timestamp |
+
+---
+
+### `notifications`
+
+In-app notifications pushed to users when order or delivery events occur.
+
+| Field | Type | Description |
+|---|---|---|
+| `notificationId` | string | Document ID |
+| `userId` | string | UID of the recipient |
+| `orderId` | string | Associated order (if applicable) |
+| `type` | string | Notification category (e.g., `order_confirmed`, `delivery_assigned`) |
+| `title` | string | Short notification headline |
+| `message` | string | Full notification body text |
+| `read` | boolean | Whether the user has seen the notification |
+| `createdAt` | timestamp | Creation timestamp |
+| `updatedAt` | timestamp | Last modification timestamp |
+
+---
+
+### `settings`
+
+Platform-wide configuration. Typically contains one or a small number of singleton documents.
+
+| Field | Type | Description |
+|---|---|---|
+| `documentId` | string | Document ID (e.g., `global`) |
+| `reservationTimeLimit` | number | Minutes before a reserved order auto-expires if not confirmed |
+
+---
+
+### `cartItems`
+
+Persists each user's shopping cart to Firestore so it survives page refreshes and device switches.
+
+| Field | Type | Description |
+|---|---|---|
+| `cartItemId` | string | Document ID |
+| `userId` | string | UID of the cart owner |
+| `productId` | string | Reference to the product |
+| `quantity` | number | Number of units in the cart |
+| `updatedAt` | timestamp | Last time this cart item was modified |
+
+---
+
+### `favorites`
+
+Stores products a user has saved to their wishlist.
+
+| Field | Type | Description |
+|---|---|---|
+| `favoriteId` | string | Document ID |
+| `userId` | string | UID of the user who saved the product |
+| `productId` | string | Reference to the saved product |
+| `createdAt` | timestamp | When the product was added to favorites |
+
+---
+
+### `accessLogs`
+
+Append-only log of authentication events (logins, logouts, access attempts). Used by admins for security auditing.
+
+| Field | Type | Description |
+|---|---|---|
+| `logId` | string | Document ID |
+| `uid` | string | Firebase Auth UID of the actor |
+| `displayName` | string | Display name at the time of the event |
+| `email` | string | Email at the time of the event |
+| `roles` | array\<string\> | Roles held at the time of the event |
+| `action` | string | Event type (e.g., `login`, `logout`, `access_denied`) |
+| `status` | string | Outcome: `success` or `failure` |
+| `timestamp` | timestamp | When the event occurred |
+
+---
+
+### `sellerActivityLogs`
+
+Records every seller-initiated status change on an order, providing a full audit trail for dispute resolution.
+
+| Field | Type | Description |
+|---|---|---|
+| `sellerId` | string | UID of the seller who performed the action |
+| `sellerName` | string | Seller's display name at the time of the action |
+| `sellerEmail` | string | Seller's email at the time of the action |
+| `actionType` | string | Type of action performed (e.g., `status_change`, `offer_applied`) |
+| `orderId` | string | Reference to the affected order |
+| `previousStatus` | string | Order status before the action |
+| `newStatus` | string | Order status after the action |
+| `timestamp` | timestamp | When the action was performed |
+
+---
+
+<Note>
+  **Firestore security rules** — the current `firestore.rules` file applies a broad allow rule to all collections (except `paymentActivityLogs`) that expires on **2025-05-25**. Before that date, proper per-collection, per-role rules should be implemented. The `paymentActivityLogs` collection already has strict rules: only admins can read, any authenticated user can create (subject to a strict schema validation), and updates/deletes are permanently denied. See [Roles & Permissions](/architecture/roles-permissions) for the `hasRole()` helper used in the rules.
+</Note>

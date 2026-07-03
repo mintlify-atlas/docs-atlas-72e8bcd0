@@ -1,0 +1,381 @@
+---
+title: "Admin API Endpoints Reference for SansiStore"
+sidebarTitle: "Admin Endpoints"
+description: "Server-side admin API routes for SansiStore: order history, orders list, courier sessions, top products, and user management."
+---
+
+Admin endpoints require a Firebase ID token belonging to a user whose `roles` array in Firestore contains `"admin"`. Pass the token in every request as `Authorization: Bearer <ID_TOKEN>`.
+
+---
+
+## GET /api/admin/order\_history
+
+Returns the complete history, timeline, items, payment, and delivery for a single order. Supports lookup by full `orderId` or by the short friendly ID (the part after `_`).
+
+### Query Parameters
+
+<ParamField query="orderId" type="string" required>
+  The full order ID (e.g. `ord_abc123`) or the short friendly suffix (e.g. `abc123`). Firestore is searched by exact match first; if not found, all orders are paginated server-side to match the suffix.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="orderId" type="string">
+  Full order identifier.
+</ResponseField>
+<ResponseField name="buyerName" type="string">
+  Display name of the buyer, resolved from the `users` collection.
+</ResponseField>
+<ResponseField name="sellerName" type="string">
+  Display name of the seller, resolved from the `users` collection. Returns `"—"` if no seller is set.
+</ResponseField>
+<ResponseField name="customerName" type="string | null">
+  Customer name as stored on the order document.
+</ResponseField>
+<ResponseField name="customerPhone" type="string | null">
+  Customer phone number.
+</ResponseField>
+<ResponseField name="address" type="string | null">
+  Delivery address.
+</ResponseField>
+<ResponseField name="total" type="number">
+  Order total in bolivianos.
+</ResponseField>
+<ResponseField name="status" type="string">
+  Current order status (e.g. `CREADO`, `CONFIRMADO`, `CANCELADO`).
+</ResponseField>
+<ResponseField name="paymentStatus" type="string | null">
+  Payment status string.
+</ResponseField>
+<ResponseField name="deliveryStatus" type="string | null">
+  Delivery status string.
+</ResponseField>
+<ResponseField name="createdAt" type="string | null">
+  ISO 8601 timestamp of order creation.
+</ResponseField>
+<ResponseField name="confirmedAt" type="string | null">
+  ISO 8601 timestamp of seller confirmation.
+</ResponseField>
+<ResponseField name="cancelledAt" type="string | null">
+  ISO 8601 timestamp of cancellation, if applicable.
+</ResponseField>
+<ResponseField name="incidentReason" type="string | null">
+  Cancellation or incident reason text.
+</ResponseField>
+<ResponseField name="items" type="array">
+  Array of `orderItems` sub-collection documents. Each item includes `itemId`, `productId`, `productName`, `unitPrice`, `quantity`, and `subtotal`.
+</ResponseField>
+<ResponseField name="payment" type="object | null">
+  Payment record with `paymentId`, `orderId`, `amount`, `method`, `status`, `registeredBy`, `verifiedBy`, `registeredAt`, and `verifiedAt`.
+</ResponseField>
+<ResponseField name="delivery" type="object | null">
+  Delivery record with `deliveryId`, `courierId`, `courierName`, `status`, `deliveryCode`, `attemptNumber`, `incidentReason`, `evidenceUrl`, `failureReason`, `amountCollected`, `customerConfirmed`, and all relevant ISO timestamps.
+</ResponseField>
+<ResponseField name="timeline" type="array">
+  Chronologically sorted array of events. Each event has `label` (string), `detail` (string, optional), `timestamp` (ISO 8601 string), and `type` (`"info"` | `"success"` | `"warning"` | `"error"`).
+</ResponseField>
+
+### Example
+
+```bash
+curl -H 'Authorization: Bearer <ID_TOKEN>' \
+  'https://sansistore-umss.vercel.app/api/admin/order_history?orderId=abc123'
+```
+
+```json
+{
+  "orderId": "ord_abc123",
+  "buyerName": "Ana Mamani",
+  "sellerName": "Tienda Central",
+  "total": 150,
+  "status": "CONFIRMADO",
+  "items": [
+    {
+      "itemId": "item_001",
+      "productName": "Cuaderno universitario",
+      "unitPrice": 15,
+      "quantity": 10,
+      "subtotal": 150
+    }
+  ],
+  "timeline": [
+    {
+      "label": "Pedido creado",
+      "detail": "Comprador: Ana Mamani",
+      "timestamp": "2024-11-01T14:00:00.000Z",
+      "type": "info"
+    }
+  ]
+}
+```
+
+---
+
+## GET /api/admin/orders\_list
+
+Returns a paginated list of all orders, optionally filtered by status.
+
+### Query Parameters
+
+<ParamField query="status" type="string">
+  Filter by order status. Omit to return orders of all statuses.
+</ParamField>
+<ParamField query="limit" type="number">
+  Number of orders per page. Defaults to `20`, maximum `50`.
+</ParamField>
+<ParamField query="cursor" type="string">
+  The `orderId` of the last item from the previous page for cursor-based pagination.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="orders" type="array">
+  Array of order summary objects. Each object contains `orderId`, `customerName`, `total`, `status`, `paymentStatus`, `deliveryStatus`, `createdAt`, `cancelledAt`, and `incidentReason`.
+</ResponseField>
+<ResponseField name="hasMore" type="boolean">
+  `true` if there are additional pages beyond the current result.
+</ResponseField>
+<ResponseField name="nextCursor" type="string | null">
+  The `orderId` to use as `cursor` in the next request. `null` when this is the last page.
+</ResponseField>
+
+### Example
+
+```bash
+curl -H 'Authorization: Bearer <ID_TOKEN>' \
+  'https://sansistore-umss.vercel.app/api/admin/orders_list?status=CREADO&limit=10'
+```
+
+```json
+{
+  "orders": [
+    {
+      "orderId": "ord_abc123",
+      "customerName": "Ana Mamani",
+      "total": 150,
+      "status": "CREADO",
+      "paymentStatus": null,
+      "deliveryStatus": null,
+      "createdAt": "2024-11-01T14:00:00.000Z",
+      "cancelledAt": null,
+      "incidentReason": null
+    }
+  ],
+  "hasMore": true,
+  "nextCursor": "ord_abc123"
+}
+```
+
+---
+
+## GET /api/admin/courier\_sessions
+
+Lists courier shift closures from the `messenger_shift_closures` Firestore collection, paginated and filtered by closure status.
+
+### Query Parameters
+
+<ParamField query="status" type="string">
+  Closure status to filter by. Defaults to `"closed"`. Other values: `"validated"`, `"rejected"`.
+</ParamField>
+<ParamField query="limit" type="number">
+  Number of closures per page. Defaults to `20`, maximum `50`.
+</ParamField>
+<ParamField query="cursor" type="string">
+  Document ID of the last closure from the previous page.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="closures" type="array">
+  Array of shift closure objects. Each closure includes:
+
+  - `id` — Firestore document ID
+  - `courierId` — UID of the courier
+  - `courierName` — resolved display name
+  - `dateKey` — string date key (e.g. `"2024-11-01"`)
+  - `status` — `"closed"` | `"validated"` | `"rejected"`
+  - `startedAt`, `closedAt`, `createdAt` — ISO 8601 timestamps
+  - `summary` — object with `completedCount`, `pendingCount`, `notDeliveredCount`, `cancelledCount`, `totalCollected`
+  - `completedOrders`, `pendingOrders`, `incidentOrders` — arrays of order snapshots
+  - `validatedBy`, `validatedByName`, `validatedAt` — validation metadata
+  - `rejectionReason` — populated when status is `"rejected"`
+</ResponseField>
+<ResponseField name="hasMore" type="boolean">
+  Whether additional pages exist.
+</ResponseField>
+<ResponseField name="nextCursor" type="string | null">
+  Document ID to use as `cursor` in the next request.
+</ResponseField>
+
+### Example
+
+```bash
+curl -H 'Authorization: Bearer <ID_TOKEN>' \
+  'https://sansistore-umss.vercel.app/api/admin/courier_sessions?status=closed&limit=5'
+```
+
+---
+
+## PATCH /api/admin/courier\_sessions
+
+Approves or rejects a courier shift closure. Once a closure is `"validated"` or `"rejected"` it cannot be changed again.
+
+### Request Body
+
+```json
+{
+  "closureId": "session_doc_id",
+  "action": "approve",
+  "rejectionReason": ""
+}
+```
+
+<ParamField body="closureId" type="string" required>
+  Firestore document ID of the closure to update.
+</ParamField>
+<ParamField body="action" type="string" required>
+  Must be `"approve"` or `"reject"`.
+</ParamField>
+<ParamField body="rejectionReason" type="string">
+  Required when `action` is `"reject"`. Describes why the closure was rejected.
+</ParamField>
+
+### Response
+
+Returns the updated closure object wrapped in `{ message, closure }`.
+
+---
+
+## GET /api/admin/top\_products
+
+Returns the top-selling active products ordered by `soldCount` descending.
+
+### Query Parameters
+
+<ParamField query="limit" type="number">
+  Maximum number of products to return. Defaults to `10`, maximum `50`.
+</ParamField>
+<ParamField query="categoryId" type="string">
+  Filter results to a specific product category.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="products" type="array">
+  Array of top product objects, each containing:
+
+  - `productId` — Firestore document ID
+  - `name` — product name
+  - `categoryId` — category ID
+  - `categoryName` — resolved category name (falls back to `"Sin categoría"`)
+  - `price` — regular price in bolivianos
+  - `offerPrice` — discounted price (omitted if no offer)
+  - `hasOffer` — boolean
+  - `imageUrl` — product image URL (omitted if not set)
+  - `soldCount` — total units sold
+</ResponseField>
+<ResponseField name="total" type="number">
+  Number of products returned.
+</ResponseField>
+
+### Example
+
+```bash
+curl -H 'Authorization: Bearer <ID_TOKEN>' \
+  'https://sansistore-umss.vercel.app/api/admin/top_products?limit=5'
+```
+
+```json
+{
+  "products": [
+    {
+      "productId": "prod_xyz",
+      "name": "Cuaderno universitario",
+      "categoryId": "cat_papeleria",
+      "categoryName": "Papelería",
+      "price": 15,
+      "hasOffer": false,
+      "soldCount": 320
+    }
+  ],
+  "total": 1
+}
+```
+
+---
+
+## GET /api/users
+
+Returns all platform users, optionally filtered by role or searched by name/email.
+
+### Query Parameters
+
+<ParamField query="role" type="string">
+  Filter to users who have this role in their `roles` array. Valid values: `admin`, `vendedor`, `mensajero`, `operador_inv`, `comprador`.
+</ParamField>
+<ParamField query="search" type="string">
+  Case-insensitive substring match against `displayName` and `email`.
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="users" type="array">
+  Array of user objects sorted alphabetically by `displayName`. Each user contains:
+
+  - `uid` — Firebase Auth UID
+  - `email` — institutional UMSS email address
+  - `displayName` — full name
+  - `phoneNumber` — 8-digit Bolivian mobile number
+  - `ci` — national identity number
+  - `internalPhone` — optional internal extension
+  - `roles` — array of role strings
+  - `isActive` — boolean
+  - `createdBy` — UID of the admin who created the account
+  - `createdAt` — ISO 8601 timestamp
+</ResponseField>
+
+### Example
+
+```bash
+curl -H 'Authorization: Bearer <ID_TOKEN>' \
+  'https://sansistore-umss.vercel.app/api/users?role=vendedor'
+```
+
+---
+
+## POST /api/users
+
+Creates a new UMSS platform user. Only `@umss.edu` domain emails are accepted.
+
+### Request Body
+
+```json
+{
+  "displayName": "Ana Mamani",
+  "email": "ana.mamani@fcyt.umss.edu.bo",
+  "phoneNumber": "71234567",
+  "ci": "12345678",
+  "roles": ["vendedor"]
+}
+```
+
+A temporary password is generated automatically and returned in the response. The admin must share it with the new user out-of-band.
+
+---
+
+## PATCH /api/users
+
+Updates an existing user's profile, roles, or active status.
+
+### Request Body
+
+```json
+{
+  "uid": "firebase_uid_here",
+  "displayName": "Ana Mamani Torres",
+  "roles": ["vendedor", "operador_inv"],
+  "isActive": true
+}
+```
+
+All fields except `uid` are optional. Changing `roles` also updates Firebase Auth custom claims.

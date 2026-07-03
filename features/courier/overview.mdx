@@ -1,0 +1,132 @@
+---
+title: "Courier Dashboard and Delivery Operations in SansiStore"
+sidebarTitle: "Overview"
+description: "SansiStore couriers manage assigned deliveries, collect cash payments, and open or close daily sessions from a mobile-friendly dashboard."
+---
+
+SansiStore's courier module provides users with the `mensajero` role a mobile-optimized portal for managing their daily delivery route. Couriers accept assigned orders, navigate to customer locations using a built-in Leaflet map, collect cash on delivery, and close their shift with a summary at the end of the day. All delivery state is synced in real time via Firestore subscriptions.
+
+<Note>
+  The legacy route `/mensajero` is a server-side redirect to `/courier`. All new development and links should use `/courier`.
+</Note>
+
+## Courier portal pages
+
+<CardGroup cols={2}>
+  <Card title="Courier dashboard" icon="layout-dashboard" href="https://sansistore-umss.vercel.app/courier">
+    Session overview with three summary metrics: pending deliveries, deliveries completed today, and total cash to collect. Lists active pending orders in a table with inline actions for registering payment and marking as delivered.
+  </Card>
+  <Card title="Active deliveries" icon="truck" href="https://sansistore-umss.vercel.app/courier">
+    The messenger-facing view uses `MessengerDashboard` at `/courier`, which sections orders into **Pedidos asignados**, **Pedidos aceptados**, and **Gestión Entregas** tabs. Each section renders order cards with contextual action buttons.
+  </Card>
+  <Card title="Delivery detail" icon="package-check" href="https://sansistore-umss.vercel.app/courier">
+    Individual delivery page rendered by `DeliveryOrderDetailPage`. Shows full order info, customer location map link, cash amount to collect, and status-transition action buttons. Accessible at `/delivery/order/{orderId}`.
+  </Card>
+  <Card title="Buyer map" icon="map-pin" href="https://sansistore-umss.vercel.app/mapa">
+    Leaflet map page at `/mapa` showing the customer's location as a marker and the allowed delivery zones as polygon overlays. Opens via a deep link that passes `lat`, `lng`, and `order` as query parameters.
+  </Card>
+</CardGroup>
+
+## Messenger shift model
+
+Couriers work in day-long shifts. When a courier closes their shift, the platform writes a document to the `messenger_shift_closures` Firestore collection.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | Document ID, formatted as `{courierId}_{dateKey}` (e.g. `uid-luis_2025-06-15`) |
+| `courierId` | `string` | UID of the courier |
+| `dateKey` | `string` | Local date in `YYYY-MM-DD` format |
+| `status` | `'closed'` | Always `closed` when the document exists |
+| `startedAt` | `Timestamp` | Earliest activity timestamp derived from the day's orders |
+| `closedAt` | `Timestamp` | Server timestamp written at closure time |
+| `summary.completedCount` | `number` | Orders delivered and payment collected today |
+| `summary.pendingCount` | `number` | Orders still in `assigned`, `accepted`, or `in_transit` at closure |
+| `summary.notDeliveredCount` | `number` | Orders in `not_delivered` state |
+| `summary.cancelledCount` | `number` | Orders cancelled for non-payment |
+| `summary.totalCollected` | `number` | Sum of `cashToCollect` for all collected orders today |
+
+<Note>
+  A shift can only be closed **once per day**. If a document with `id = {courierId}_{dateKey}` already exists, `closeMessengerShift` throws `La jornada de hoy ya fue cerrada`. The courier must contact an admin to reopen or correct the record.
+</Note>
+
+## Delivery acceptance eligibility
+
+A courier can only have **one active delivery** at a time. An active delivery is one with status `accepted` or `in_transit`. Deliveries in `assigned`, `delivered`, `not_delivered`, `cancelled`, `reprogrammed`, or `pending_reassignment` do not count as active.
+
+The eligibility check is enforced in two layers:
+
+**Client-side (`acceptEligibility.ts`):**
+
+```typescript
+// Only accepted and in_transit count as an active delivery.
+const ACTIVE_DELIVERY_STATUSES = ['accepted', 'in_transit'];
+
+export function canAcceptAssignedOrder(
+  orders: ReadonlyArray<Pick<MessengerOrder, 'deliveryStatus'>>
+): boolean {
+  return !orders.some(order =>
+    ACTIVE_DELIVERY_STATUSES.includes(order.deliveryStatus)
+  );
+}
+```
+
+**Server-side guard (`assertCanAcceptMessengerOrder`):**
+Before any `accepted` write reaches Firestore, the service queries all `deliveries` documents for the courier and rejects the request if any sibling delivery is in `accepted` or `in_transit`. This server-side check prevents double-acceptance from multiple browser tabs or stale UI state.
+
+If blocked, the UI displays the `AcceptBlockedModal` with the message:
+
+> _Ya tienes una entrega activa (aceptada o en camino). Termínala antes de aceptar otro pedido._
+
+The `deliveryAvailability.ts` library used by the admin panel exposes `countActiveDeliveriesByCourier` and `isCourierAvailableFromActiveCount` for a courier-level availability check from the admin assignment view. A courier is considered available only when their active delivery count is **0**.
+
+## Order visibility rules
+
+The `getVisibleMessengerOrders` utility de-duplicates the deliveries subscription so each order ID appears only once in the courier's list. When the same `orderId` is associated with multiple delivery documents (e.g. after a reprogramming), the rule is:
+
+- **Higher status priority wins.** The priority order is: `assigned / reprogrammed` (1) → `accepted` (2) → `in_transit` (3) → `not_delivered / pending_reassignment / cancelled` (4) → `delivered` (5).
+- **If same priority:** the document with the most recent `updatedAt` / `assignedAt` / `createdAt` timestamp wins.
+- **If same timestamp:** the document with the lexicographically greater `deliveryId` wins.
+
+This ensures the courier always sees the **most advanced** state of each order and never sees duplicate cards.
+
+## Cash collection
+
+All deliveries in SansiStore are cash-on-delivery (`paymentMethod: 'cash_on_delivery'`). The amount the courier must collect is stored in the delivery document as `cashToCollect`, which is derived from `delivery.amountCollected` or, if absent, from the linked `payment.amount` or `order.total`.
+
+When the courier registers a payment (`registerMessengerCashPayment`), a single `writeBatch` atomically updates:
+
+- `orders/{orderId}` → `paymentStatus: 'COBRADO'`, `paymentCollectedAt`, `collectedBy`
+- `deliveries/{deliveryId}` → `amountCollected`, `customerConfirmed: true`, `status: 'delivered'`
+- `payments/{paymentId}` → `status: 'COBRADO'`, `collectedAt`, `collectedBy`
+
+Currency amounts are formatted with `formatBolivianos`, which rounds floating-point noise before rendering (e.g. `302.59999999999997` → `Bs 302.6`).
+
+## Daily courier workflow
+
+<Steps>
+  <Step title="Start the shift">
+    The courier logs in at `/courier`. The `MessengerDashboard` component subscribes to all `deliveries` where `courierId == currentUser.uid`. Any orders in `assigned` status appear immediately in the **Pedidos asignados** section.
+  </Step>
+  <Step title="Accept assigned deliveries">
+    The courier taps **Aceptar pedido** on an assigned order card. A confirmation dialog (`ConfirmAssignedOrderActionModal`) appears before any write. On confirmation, `acceptMessengerOrder` first runs the server-side eligibility check, then transitions the delivery to `accepted`.
+
+    Only one delivery can be in `accepted` or `in_transit` at a time. If the check fails, the `AcceptBlockedModal` is shown instead.
+  </Step>
+  <Step title="Start transit">
+    From the delivery detail page at `/delivery/order/{orderId}`, the courier taps **Iniciar entrega**. This transitions status to `in_transit` and records `inTransitAt` on the delivery document.
+  </Step>
+  <Step title="Collect payment and confirm delivery">
+    On arrival at the customer's location, the courier:
+    1. Taps **Registrar pago** — records `paymentCollectedAt` and marks payment as `COBRADO`.
+    2. Taps **Marcar como entregado** (enabled only after payment is registered) — transitions delivery to `delivered` and sets `customerConfirmed: true`.
+
+    If the customer cannot pay or is absent, the courier can mark the order as **not delivered** or **cancelled for non-payment** via the `UndeliveredModal` or `CancelNoPaymentModal`. Both actions write the incident reason to the delivery document and update the order status.
+  </Step>
+  <Step title="Close the shift">
+    At the end of the day, the courier taps **Cerrar jornada**. The platform calls `closeMessengerShift`, which builds a `MessengerShiftClosure` snapshot from all of the day's orders and writes it to `messenger_shift_closures`. The closure is permanent — a new shift begins automatically the next day.
+  </Step>
+</Steps>
+
+<Tip>
+  The courier portal is a Progressive Web App (PWA) optimized for mobile use in the field. Couriers should install it to their home screen for the best experience, especially when navigating between the orders list and the Leaflet map on low-connectivity networks.
+</Tip>

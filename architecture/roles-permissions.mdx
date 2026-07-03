@@ -1,0 +1,200 @@
+---
+title: "User Roles and Permissions in SansiStore"
+sidebarTitle: "Roles & Permissions"
+description: "SansiStore has five user roles—buyer, seller, courier, inventory operator, and admin—each with a dedicated portal and Firestore-enforced access rules."
+---
+
+SansiStore uses Firebase Auth for identity and Firestore documents for authorisation. After a successful Google sign-in, the server reads the authenticated user's `users/{uid}` document and inspects the `roles` array to determine which portals and API routes the user may access. This page describes every role, its default route, key pages, and how the rules are enforced.
+
+## Authentication
+
+All authentication is handled by Firebase Auth using **Google OAuth**. There is no username/password option.
+
+In production, the `GoogleAuthProvider` is configured with:
+
+```typescript
+googleProvider.setCustomParameters({
+  hd: 'umss.edu',       // Restricts the account chooser to @umss.edu accounts
+  prompt: 'select_account', // Prevents silent re-use of a cached non-institutional account
+});
+```
+
+This means only accounts belonging to the **@umss.edu** domain can log in to the production instance. The local Auth emulator does not enforce this restriction.
+
+## Role Storage
+
+Roles are stored as a string array in the `roles` field of each user's Firestore document (`users/{uid}`). A user may hold **multiple roles simultaneously** — for example, a team member could be both `vendedor` and `operador_inv`.
+
+```
+users/{uid} {
+  uid: "abc123",
+  email: "user@umss.edu",
+  roles: ["vendedor", "operador_inv"],
+  ...
+}
+```
+
+The five possible role values are:
+
+| Role value | Display name | Portal |
+|---|---|---|
+| *(no role)* | Buyer / Comprador | `/productos`, `/carrito`, `/mis-pedidos` |
+| `vendedor` | Seller / Vendedor | `/seller/*` |
+| `mensajero` | Courier / Mensajero | `/courier` |
+| `operador_inv` | Inventory Operator | `/inventory` |
+| `admin` | Administrator | `/admin` |
+
+<Warning>
+  **Role assignment is admin-only.** Only an admin can add or remove roles from a user document. The Firestore security rules do not permit self-assignment of roles, and API routes that modify `users/{uid}.roles` require a verified `admin` claim on the server.
+</Warning>
+
+## Role Descriptions
+
+<AccordionGroup>
+  <Accordion title="Buyer (Authenticated User)">
+    Any authenticated user who does not hold a special role is treated as a buyer. Buyers can browse the product catalogue, manage their shopping cart, place and track orders, leave reviews, save favorites, and manage their delivery addresses.
+
+    **Key pages:**
+    - `/productos` — product catalogue with search and filters
+    - `/carrito` — shopping cart and checkout
+    - `/mis-pedidos` — buyer order history and tracking
+    - `/favoritos` — saved products wishlist
+    - `/mi-perfil` — profile and saved addresses
+
+    Unauthenticated (anonymous) visitors can browse the catalogue but must sign in to place an order.
+  </Accordion>
+
+  <Accordion title="Seller — vendedor">
+    Sellers manage the complete order fulfillment lifecycle after a buyer places an order. They move orders through statuses, manage promotional offers, and close daily collection reports.
+
+    **Default route:** `/seller/created-orders`
+
+    **Key pages:**
+    - `/seller/created-orders` — new orders awaiting acceptance
+    - `/seller/reserved-orders` — accepted, payment-pending orders
+    - `/seller/packaged-orders` — orders being packaged
+    - `/seller/ready-orders` — orders ready for courier pickup
+    - `/seller/failed-orders` — orders with delivery failures
+    - `/seller/undelivered-orders` — undelivered order queue
+    - `/seller/rejected-orders` — orders rejected or cancelled
+    - `/seller/daily-collections` — daily revenue summary
+    - `/seller/offers` — promotional pricing management
+  </Accordion>
+
+  <Accordion title="Courier — mensajero">
+    Couriers handle last-mile delivery. They receive assigned deliveries, confirm pickups from the seller, navigate to buyer addresses (using the integrated Leaflet map), and record delivery outcomes including cash collection.
+
+    **Default route:** `/courier`
+
+    **Key pages:**
+    - `/courier` — active delivery queue
+    - `/courier/delivery/{id}` — delivery detail view with interactive map, delivery code verification, and evidence photo upload
+  </Accordion>
+
+  <Accordion title="Inventory Operator — operador_inv">
+    Inventory operators manage physical stock. They register product entries and exits, record movements with reasons, handle incidents, and support the packaging stage of the order lifecycle.
+
+    **Default route:** `/inventory`
+
+    **Key pages:**
+    - `/inventory` — current stock levels overview
+    - `/inventory/entries` — register stock entries
+    - `/inventory/exits` — register stock exits
+    - `/inventory/movements` — full movement history
+    - `/inventory/incidents` — incident log
+    - `/inventory/packaging` — orders ready for packaging
+  </Accordion>
+
+  <Accordion title="Admin — admin">
+    Admins have unrestricted access to the entire platform. In addition to everything sellers and operators can do, admins can create and manage users (including role assignment), manage product categories, view platform-wide analytics, reconcile courier cash sessions, inspect audit logs, and monitor seller activity.
+
+    **Default route:** `/admin`
+
+    **Key pages:**
+    - `/admin` — executive dashboard with KPIs
+    - `/admin/users` — user management and role assignment
+    - `/admin/categories` — product category management
+    - `/admin/analytics` — sales and traffic analytics
+    - `/admin/reconciliation` — courier session reconciliation
+    - `/admin/audit-logs` — `accessLogs` viewer
+    - `/admin/order-history` — full platform order history
+    - `/admin/seller-activity` — `sellerActivityLogs` viewer
+  </Accordion>
+</AccordionGroup>
+
+## Default Route Logic
+
+When a user logs in, the application calls `getDefaultRouteForRoles(roles)` to determine where to redirect them. The function is defined in `src/features/auth/utils/defaultRoute.ts`:
+
+```typescript
+// src/features/auth/utils/defaultRoute.ts
+const SINGLE_ROLE_DEFAULT_ROUTES: Record<string, string> = {
+  admin: '/admin',
+  vendedor: '/seller/created-orders',
+  mensajero: '/courier',
+  operador_inv: '/inventory',
+};
+
+export function getDefaultRouteForRoles(roles: unknown) {
+  if (!Array.isArray(roles) || roles.length !== 1) return '/';
+
+  return SINGLE_ROLE_DEFAULT_ROUTES[roles[0]] ?? '/';
+}
+```
+
+**Key behaviour:**
+
+- A user with **exactly one** special role is redirected to that role's default route.
+- A user with **zero** roles (buyer) or **multiple** roles is redirected to `/` (the product catalogue), where they can navigate to each portal manually.
+- An unrecognised role value also falls back to `/`.
+
+| Roles array | Redirect target |
+|---|---|
+| `[]` | `/` |
+| `["vendedor"]` | `/seller/created-orders` |
+| `["mensajero"]` | `/courier` |
+| `["operador_inv"]` | `/inventory` |
+| `["admin"]` | `/admin` |
+| `["vendedor", "admin"]` | `/` |
+
+## Firestore `hasRole()` Security Rule
+
+The Firestore security rules use a shared `hasRole(role)` function to gate access to sensitive collections. It checks for the role in three places, in order: the JWT `role` claim, the JWT `roles` claim array, and finally the `users` document in Firestore itself.
+
+```javascript
+// firestore.rules
+function hasRole(role) {
+  return request.auth != null
+    && (
+      request.auth.token.role == role
+      || (request.auth.token.roles != null
+          && request.auth.token.roles.hasAny([role]))
+      || get(/databases/$(database)/documents/users/$(request.auth.uid))
+           .data.roles.hasAny([role])
+    );
+}
+```
+
+This function is used in collection-level rules, for example:
+
+```javascript
+match /paymentActivityLogs/{logId} {
+  allow read: if hasRole('admin');
+  allow create: if request.auth != null && isValidPaymentActivityLog();
+  allow update, delete: if false;
+}
+```
+
+<Note>
+  The current `firestore.rules` file applies a broad `allow read, write` rule to all collections other than `paymentActivityLogs`, with a hard expiry date of **2025-05-25**. After that date, all client writes and reads to unguarded collections will be denied. Proper per-collection rules using `hasRole()` should be implemented before that deadline.
+</Note>
+
+## Role Enforcement Summary
+
+| Layer | Mechanism |
+|---|---|
+| **Google OAuth** | `hd: 'umss.edu'` restricts sign-in to institutional accounts (production only) |
+| **Client routing** | `getDefaultRouteForRoles()` redirects users to the correct portal on login |
+| **Server routes** | Astro API endpoints verify the Firebase ID token via `firebase-admin` and check the `users/{uid}.roles` array |
+| **Firestore rules** | `hasRole()` function enforces read/write access per collection |
+| **Dev bypass** | `ENABLE_DEV_ADMIN_BYPASS=true` + `DEV_ADMIN_UID` grants local admin access without a real Firestore role |

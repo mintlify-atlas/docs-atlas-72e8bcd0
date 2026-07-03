@@ -1,0 +1,264 @@
+---
+title: "Delivery Assignment and Incident Handling for Sellers"
+sidebarTitle: "Deliveries"
+description: "Sellers assign couriers to deliveries, manage failure reasons, log incidents, and track undelivered or reprogrammed orders in SansiStore."
+---
+
+Once an order is packaged and marked **LISTO**, the seller's next responsibility is to assign a courier (mensajero) and monitor the delivery to completion. SansiStore models each delivery as a separate Firestore document in the `deliveries` collection, linked to the originating order. The seller portal provides dedicated pages for incidents, failure reasons, and decisions on non-delivered orders.
+
+## Delivery Assignment Flow
+
+<Steps>
+  <Step title="Order Reaches LISTO Status">
+    After `markOrderReady` updates the order to `LISTO`, it appears on `/seller/ready-orders`. The `ReadyOrdersPanel` component lists all such orders filtered by `sellerId`.
+  </Step>
+
+  <Step title="Seller Opens the Assign Messenger Modal">
+    Clicking an order card opens `AssignMessengerModal`. The modal calls `useGetMessengers` to load all registered couriers from Firestore and shows their availability status (`isAvailable: boolean`).
+
+    ```ts
+    // src/features/seller/types.ts
+    export interface Messenger {
+      uid: string;
+      displayName: string;
+      institutionalId: string;
+      isAvailable: boolean;
+    }
+    ```
+
+    <Note>
+      If all couriers are busy (`isAvailable: false`), the modal displays a warning: *"Todos los mensajeros están ocupados en este momento."* The confirm button remains disabled until an available courier is selected.
+    </Note>
+  </Step>
+
+  <Step title="Confirm Courier Assignment">
+    The seller selects an available courier and clicks **Confirmar asignación**. This triggers `useAssignOrdersToDelivery.assingToDelivery(orderId, courierId)`, which calls `assignCourierToDelivery` in a single Firestore transaction.
+
+    ```ts
+    // src/features/seller/services/assignCourierToDelivery.ts
+    export const assignCourierToDelivery = async (
+      db: Firestore,
+      orderId: string,
+      courierId: string,
+    ): Promise<void> => {
+      await runTransaction(db, async (tx) => {
+        const orderRef  = doc(db, 'orders', orderId);
+        const deliveryRef = doc(collection(db, 'deliveries'));
+        const deliveryCode = `DEL-${Date.now().toString(36).toUpperCase()}`;
+
+        // Validate order exists
+        const orderSnap = await tx.get(orderRef);
+        if (!orderSnap.exists()) throw new Error('Order no existe.');
+
+        // Advance order status
+        tx.update(orderRef, {
+          status: 'ASIGNADO',
+          deliveryId: deliveryRef.id,
+          deliveryStatus: 'ASIGNADO',
+          updatedAt: serverTimestamp(),
+        });
+
+        // Create delivery document
+        tx.set(deliveryRef, {
+          orderId,
+          courierId,
+          status: 'assigned',
+          deliveryCode,
+          attemptNumber: 1,
+          incidentReason: null,
+          evidenceUrl: null,
+          failureReason: null,
+          amountCollected: null,
+          customerConfirmed: false,
+          customerConfirmedAt: null,
+          pickedUpAt: null,
+          inTransitAt: null,
+          deliveredAt: null,
+          failedAt: null,
+          reprogrammedAt: null,
+          createdAt: serverTimestamp(),
+          assignedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      });
+    };
+    ```
+
+    The transaction is atomic — if the order document does not exist or the write fails, neither document is modified.
+  </Step>
+
+  <Step title="Courier Picks Up and Delivers">
+    The courier app moves the delivery through `picked_up → in_transit → delivered`. On a successful delivery the order reaches `ENTREGADO` or `PAGADO`. On failure or non-delivery it lands in `NO ENTREGADO`.
+  </Step>
+
+  <Step title="Courier Reassignment (if needed)">
+    If a delivery stalls in `PENDIENTE-ASIGNACION`, the seller can reassign using `reassignCourierToDelivery`. This function updates the existing delivery document's `courierId` and resets its `assignedAt` timestamp, while updating the order back to `ASIGNADO`.
+
+    ```ts
+    // src/features/seller/services/assignCourierToDelivery.ts
+    export const reassignCourierToDelivery = async (
+      db: Firestore,
+      deliveryId: string,
+      orderId: string,
+      courierId: string,
+    ): Promise<void> => {
+      // Validates orderData.status === 'PENDIENTE-ASIGNACION'
+      tx.update(deliveryRef, {
+        courierId,
+        status: 'assigned',
+        assignedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      tx.update(orderRef, {
+        status: 'ASIGNADO',
+        deliveryStatus: 'ASIGNADO',
+        updatedAt: serverTimestamp(),
+      });
+    };
+    ```
+
+    The `useRessignOrdersToDelivery` hook wraps this service and is used by `ReassignModal`.
+  </Step>
+</Steps>
+
+## Deliveries Firestore Schema
+
+Each document in the `deliveries` collection contains:
+
+| Field | Type | Description |
+|---|---|---|
+| `orderId` | `string` | Reference to the parent order |
+| `courierId` | `string` | UID of the assigned courier |
+| `status` | `string` | `assigned` → `picked_up` → `in_transit` → `delivered` / `failed` / `reprogrammed` |
+| `deliveryCode` | `string` | Human-readable code, e.g. `DEL-LX3K9F` |
+| `attemptNumber` | `number` | Increments on reassignment or reprogramming |
+| `incidentReason` | `string \| null` | Free-text incident logged by courier |
+| `evidenceUrl` | `string \| null` | URL to photographic evidence |
+| `failureReason` | `string \| null` | Structured failure category |
+| `amountCollected` | `number \| null` | Cash collected on delivery (BOB) |
+| `customerConfirmed` | `boolean` | Whether the buyer confirmed reception |
+| `customerConfirmedAt` | `Timestamp \| null` | When the buyer confirmed |
+| `pickedUpAt` | `Timestamp \| null` | When courier picked up the package |
+| `inTransitAt` | `Timestamp \| null` | When courier departed |
+| `deliveredAt` | `Timestamp \| null` | Successful delivery timestamp |
+| `failedAt` | `Timestamp \| null` | Failure timestamp |
+| `reprogrammedAt` | `Timestamp \| null` | When delivery was rescheduled |
+| `assignedAt` | `Timestamp` | When courier was assigned |
+| `createdAt` | `Timestamp` | Document creation time |
+| `updatedAt` | `Timestamp` | Last modification time |
+
+<Tip>
+  The `deliveryCode` field is generated as `DEL-` followed by the base-36 representation of `Date.now()`, providing a short, unique, human-readable identifier couriers can quote to buyers.
+</Tip>
+
+## Incidents Page
+
+The `/seller/incidents` page (`IncidentsPanel`) lets the seller log and review delivery problems in real time. An incident is a note attached to a delivery explaining why it could not be completed as expected — for example, a blocked road or an inaccessible building.
+
+<Accordion title="Incident fields stored in the order">
+  When an incident is recorded, the order document is updated with:
+
+  - `incidentReason` (`string`) — the human-readable incident description
+  - `incidentNotes` (`string | null`) — optional extended notes
+
+  Both fields are visible in `OrderDetailsModal` and on the individual order detail page at `/seller/orders/[id]`.
+</Accordion>
+
+## Failure Reasons Page
+
+The `/seller/failure-reasons` page is powered by the `useDeliveryFailureReasons` hook. It combines:
+
+- **`ordersAwaitingReason`** — rejected orders (`RECHAZADO`) that have no seller-registered failure reason yet and no customer return reason
+- **`registeredReasons`** — seller-submitted records from the `deliveryFailures` collection
+- **`customerReturnReasons`** — buyer-submitted return requests from the `returns` collection
+
+### Registering a Failure Reason
+
+The seller picks a structured reason from the `DELIVERY_FAILURE_REASON_OPTIONS` list and optionally adds a description:
+
+```ts
+// src/features/seller/services/deliveryFailureReasonsService.ts
+export const DELIVERY_FAILURE_REASON_OPTIONS = [
+  'Cliente ausente',
+  'Direccion incorrecta',
+  'Producto rechazado por el cliente',
+  'Producto dañado o incompleto',
+  'Error en el pedido',
+  'Otro',
+] as const;
+```
+
+`registerDeliveryFailureReason` validates that:
+
+1. The order exists and belongs to the authenticated seller
+2. The order is in `RECHAZADO` status
+3. No reason has already been registered for this order
+4. No customer return has been filed for this order
+
+On success it atomically writes to `deliveryFailures/{orderId}` and updates the order with `deliveryFailureReason`, `deliveryFailureDescription`, `deliveryFailureRegisteredAt`, and `deliveryFailureRegisteredBy`.
+
+<Warning>
+  Calling `registerDeliveryFailureReason` on an order that already has a customer return in the `returns` collection will throw `'El cliente ya registro el motivo de este pedido.'` The seller should consult the customer's return request instead.
+</Warning>
+
+## Failed Orders — Seller Decision
+
+Orders in `NO ENTREGADO` status surface on `/seller/failed-orders`. The `FailedOrdersPanel` uses `useFailedOrderDecision` (which calls `restartFailedOrder` or `cancelFailedOrder`) to resolve each case.
+
+<Tabs>
+  <Tab title="Restart Order">
+    Restarting returns the order to `RESERVADO` so the seller can re-package and re-assign a courier. If `stockRestored` is `true` (inventory was already freed), the service re-reserves the items before updating the order:
+
+    ```ts
+    // src/features/seller/services/failedOrderDecisionService.ts
+    tx.update(orderRef, {
+      status: 'RESERVADO',
+      deliveryId: null,
+      deliveryStatus: null,
+      incidentReason: null,
+      incidentNotes: null,
+      failedAt: null,
+      cancelledAt: null,
+      stockRestored: false,
+      reservedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    ```
+  </Tab>
+  <Tab title="Cancel Order">
+    Cancellation closes the order permanently as `CANCELADO`. If stock had not yet been restored, the service decrements `stockReserved` in each product's inventory document:
+
+    ```ts
+    tx.update(orderRef, {
+      status: 'CANCELADO',
+      deliveryId: null,
+      deliveryStatus: null,
+      cancelledAt: serverTimestamp(),
+      incidentReason: 'Cancelado por vendedor tras entrega fallida',
+      stockRestored: true,
+      stockRestoredAt: serverTimestamp(),
+      stockRestoredBy: sellerId,
+      updatedAt: serverTimestamp(),
+    });
+    ```
+  </Tab>
+</Tabs>
+
+## Undelivered Orders — Seller Decision
+
+`/seller/undelivered-orders` shows the same `NO ENTREGADO` queue but is managed by `useUndeliveredOrderDecision`, which calls `restartUndeliveredOrder` or `cancelUndeliveredOrder` from `undeliveredOrderDecisionService.ts`. The logic is identical to the failed-order flow — restart re-reserves stock when needed, and cancel releases it. Both hooks expose `loadingAction`, `successAction`, and `error` for optimistic UI feedback.
+
+```ts
+// useUndeliveredOrderDecision return shape
+{
+  loadingAction: { orderId: string; action: 'restart' | 'cancel' } | null;
+  successAction: { orderId: string; action: 'restart' | 'cancel' } | null;
+  error: string | null;
+  restartOrder: (orderId: string) => Promise<void>;
+  cancelOrder:  (orderId: string) => Promise<void>;
+}
+```
+
+<Note>
+  Both `FailedOrdersPanel` and `UndeliveredOrdersPanel` display an `incidentReason` badge when the field is populated, giving the seller immediate context before making the restart or cancel decision.
+</Note>

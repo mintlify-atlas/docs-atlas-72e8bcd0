@@ -1,0 +1,110 @@
+---
+title: "Track Stock Movements and Entries in SansiStore"
+sidebarTitle: "Movements"
+description: "Every inventory change in SansiStore is logged as a movement with operator ID, type, reason, and quantity for full audit traceability."
+---
+
+Every time stock changes hands in SansiStore — whether a new supplier batch arrives, units are written off as damaged, or an order's reserved stock is released after a failed delivery — the platform writes a document to the `inventoryMovements` Firestore collection. This immutable log is the single source of truth for all inventory audits and reconciliation tasks.
+
+## The `inventoryMovements` collection
+
+Each document records one discrete inventory action. Fields are written atomically inside a `writeBatch` or `runTransaction` alongside the corresponding `inventory` document update, so the movement record and the stock counter are always consistent.
+
+| Field | Type | Description |
+|---|---|---|
+| `productId` | `string` | Firestore ID of the product affected |
+| `operatorId` | `string` | UID of the authenticated operator who performed the action |
+| `type` | `string` | Movement type — see table below |
+| `reason` | `string` | Human-readable reason selected from a predefined list |
+| `quantity` | `number` | Positive integer representing units changed |
+| `createdAt` | `Timestamp` | Server timestamp written at commit time |
+| `sequence` | `number` | Tie-breaker for movements written in the same millisecond batch |
+| `totalCost` | `number` *(optional)* | Total purchase cost for `Lote nuevo` entries |
+| `unitCost` | `number` *(optional)* | Per-unit cost derived from `totalCost ÷ quantity` |
+
+### Example movement document
+
+```json
+{
+  "productId": "leche-pil-900ml",
+  "operatorId": "uid-operador-001",
+  "type": "ENTRADA",
+  "reason": "Lote nuevo",
+  "quantity": 48,
+  "totalCost": 576.00,
+  "unitCost": 12.00,
+  "sequence": 1,
+  "createdAt": "2025-06-15T09:32:11.000Z"
+}
+```
+
+## Movement types
+
+The four movement types cover the full lifecycle of inventory changes. The `StockMovementForm` component (used on `/inventory/entrysExits`) only exposes `ENTRADA` and `SALIDA` directly; the others are written programmatically by platform services.
+
+<Accordion title="ENTRADA — stock coming in">
+  Written when an operator logs new physical stock arriving in the warehouse. This is the standard type for supplier deliveries and returned orders.
+
+  **When to use:** Receiving a new batch from a supplier (`Lote nuevo`), accepting a returned order (`Devolución de pedido`), or correcting an undercounted stock discrepancy (`Corrección de inventario`).
+
+  **Effect on inventory:** `stockTotal += quantity`, `stockAvailable += quantity`.
+</Accordion>
+
+<Accordion title="SALIDA — stock going out">
+  Written when units are physically removed from the warehouse for reasons other than a completed sale — damaged goods, theft, or a manual correction.
+
+  **When to use:** Writing off spoiled or defective goods (`Mermas o defectos`), correcting an overcounted discrepancy (`Corrección de inventario`), or recording confirmed lost units (`Robo / Pérdida`).
+
+  **Effect on inventory:** `stockTotal -= quantity`, `stockAvailable -= quantity`. The form validates that `currentStock >= quantity` before allowing a SALIDA to prevent negative totals.
+</Accordion>
+
+<Accordion title="INICIALIZACION — initial stock setup">
+  Written once per product when inventory tracking is first enabled. Sets the opening balance for a product that had no prior inventory document.
+
+  **When to use:** Only during the initial setup of a product's inventory record. Subsequent changes must use ENTRADA or SALIDA.
+</Accordion>
+
+<Accordion title="VENTA — units sold">
+  Written automatically by the order fulfillment service when a sale is confirmed and stock reservation is converted to a real exit. This type is never created manually.
+
+  **When to use:** Triggered automatically. Operators should not create VENTA movements through the entrysExits form.
+</Accordion>
+
+## The `/inventory/movements` page
+
+The movement history page renders the `MovementHistory` component, which subscribes to `inventoryMovements` ordered by `createdAt` descending with a page size of 10. When two movements share the exact same timestamp (possible with batch writes), the `sequence` field is used as a secondary sort key.
+
+The page is read-only — operators cannot edit or delete historical records. Each row shows:
+- **Product ID** (resolved to a display name in future iterations)
+- **Type badge** with color coding: green for ENTRADA/INICIALIZACION, red for SALIDA, blue for VENTA
+- **Reason** and **operator name** (resolved from the `users` collection via `operatorId`)
+- **Quantity delta** with `+` or `−` sign
+
+<Tip>
+  Use the pagination controls at the bottom of the movement history to navigate through older records. The component uses Firestore cursor-based pagination (`startAfter`) so each page load is efficient regardless of the total document count.
+</Tip>
+
+## Incidents — failed order stock restoration
+
+The `/inventory/incidents` page exposes the `FailedOrdersPanel` component, which listens to `orders` documents where `status` is `NO ENTREGADO` or `CANCELADO`. These are deliveries that the courier could not complete.
+
+For each failed order, an operator can trigger **stock restoration**:
+
+1. The `restoreStockForOrder` service runs a Firestore `runTransaction`.
+2. Inside the transaction, for each order item:
+   - `stockReserved` on the `inventory` document is decremented by `item.quantity`.
+   - A new `ENTRADA` movement is written to `inventoryMovements` with the reason `Reposición por pedido fallido {orderId}`.
+3. The order document is updated with `stockRestored: true`, `stockRestoredBy`, and `stockRestoredAt` to prevent duplicate restorations.
+
+<Warning>
+  Stock restoration is **irreversible** and can only be performed once per order. If `stockRestored` is already `true` on the order document, the transaction throws `El stock de este pedido ya fue repuesto` and the operation is aborted.
+</Warning>
+
+## Packaging — dispatch preparation
+
+The `/inventory/packaging` page hosts the `OrderDispatch` component, which manages the preparation and physical handover of packages. Operators use it to:
+
+- Mark orders as **packed** and ready for courier pickup.
+- Record the warehouse-to-courier handover before the order enters the delivery flow.
+
+This page connects inventory operations to the courier workflow: a package confirmed in `/inventory/packaging` is what the courier picks up at the start of their delivery route.

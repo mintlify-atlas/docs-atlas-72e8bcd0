@@ -1,0 +1,78 @@
+---
+title: "Inventory Management for SansiStore Operators"
+sidebarTitle: "Overview"
+description: "Inventory operators manage product stock levels, track entries and exits, and monitor low-stock alerts using SansiStore's inventory module."
+---
+
+SansiStore's inventory module gives users with the `operador_inv` role a dedicated workspace to maintain accurate stock counts, log every product movement, and respond to discrepancies before they affect order fulfillment. All inventory data is stored in Firestore and streamed in real time to the dashboard, so operators always see current stock levels without a page refresh.
+
+## Inventory pages
+
+The module is accessible at `/inventory` and contains six sub-pages, each focused on a distinct operational task.
+
+<CardGroup cols={2}>
+  <Card title="Panel general" icon="layout-dashboard" href="https://sansistore-umss.vercel.app/inventory">
+    Real-time stock dashboard. Shows all products with their current `stockAvailable`, `stockReserved`, and `stockTotal`. Filterable by stock status (low / normal) and category.
+  </Card>
+  <Card title="Mis productos" icon="package-plus" href="https://sansistore-umss.vercel.app/inventory/products">
+    Product catalog maintained by inventory operators. Create, edit, and toggle products active or inactive. Each product record links to an `inventory` document via the same product ID.
+  </Card>
+  <Card title="Entrada y salida stock" icon="arrow-down-up" href="https://sansistore-umss.vercel.app/inventory/entrysExits">
+    Form for logging physical stock changes. Choose ENTRADA or SALIDA, select a product, enter a quantity and reason. Every confirmed operation writes an atomic batch to both the `inventory` and `inventoryMovements` collections.
+  </Card>
+  <Card title="Historial de movimientos" icon="history" href="https://sansistore-umss.vercel.app/inventory/movements">
+    Paginated log of all `inventoryMovements` documents ordered by `createdAt` descending. Each row shows product, movement type, reason, operator name, and quantity delta. Tie-breaking uses the `sequence` field for same-millisecond batch writes.
+  </Card>
+  <Card title="Pedidos con fallos" icon="package-x" href="https://sansistore-umss.vercel.app/inventory/incidents">
+    Lists orders whose status is `NO ENTREGADO` or `CANCELADO`. Operators can restore reserved stock back to available in a single Firestore transaction, which also records an ENTRADA movement and sets `stockRestored: true` on the order.
+  </Card>
+  <Card title="Mis empaques" icon="package-search" href="https://sansistore-umss.vercel.app/inventory/packaging">
+    Tracks order dispatch and warehouse handover. Operators prepare packages for orders and record the physical handover to the courier before pickup.
+  </Card>
+</CardGroup>
+
+## Inventory Firestore model
+
+Each product has a corresponding document in the `inventory` collection, keyed by the same `productId`. The dashboard merges both `products` and `inventory` snapshots client-side to build `DashboardProduct` objects.
+
+| Field | Type | Description |
+|---|---|---|
+| `stockTotal` | `number` | Total physical units in the warehouse |
+| `stockAvailable` | `number` | Units available for new orders |
+| `stockReserved` | `number` | Units reserved by orders that are pending delivery |
+| `minStock` | `number` | Threshold below which a low-stock alert fires |
+| `enabled` | `boolean` | Whether the product is active in inventory tracking |
+| `updatedAt` | `Timestamp` | Last time any inventory field was modified |
+
+<Note>
+  `stockAvailable` is always derived as `stockTotal − stockReserved`. When `stockAvailable` drops at or below `minStock`, the dashboard highlights the product row and a `StockAlertToast` is shown to the operator. This threshold is configurable per product.
+</Note>
+
+## Stock replenishment flow
+
+The following steps describe how an inventory operator handles a new supplier delivery from end to end.
+
+<Steps>
+  <Step title="Log the incoming batch">
+    Navigate to **Entrada y salida stock** (`/inventory/entrysExits`). Select movement type **ENTRADA**, choose the product and category, enter the quantity received, and select the reason **Lote nuevo**. When "Lote nuevo" is chosen, the form also requires the **total purchase cost** (`totalCost`) for the batch so the unit cost can be calculated.
+  </Step>
+  <Step title="Review and confirm the sale price">
+    Before saving, a confirmation modal displays the computed unit cost (`totalCost ÷ quantity`) alongside the current sale price. The operator can update the product's public sale price in the same step. This update is applied atomically to the `products` document inside the same Firestore batch.
+  </Step>
+  <Step title="Batch write to Firestore">
+    Clicking **Confirmar y Guardar** commits a single `writeBatch` that:
+    - Increments `stockTotal` and `stockAvailable` on the `inventory` document.
+    - Creates a new `inventoryMovements` document with `type: ENTRADA`, `quantity`, `operatorId`, `reason`, `totalCost`, and `unitCost`.
+    - Optionally updates the product sale price in `products`.
+  </Step>
+  <Step title="Verify in movement history">
+    Open **Historial de movimientos** (`/inventory/movements`) to confirm the new ENTRADA record appears at the top of the list. The dashboard on `/inventory` will also reflect the updated `stockAvailable` in real time.
+  </Step>
+  <Step title="Handle low-stock alerts">
+    If `stockAvailable ≤ minStock` for any product, a low-stock badge is shown on the dashboard. Use the stock filter (`low`) to isolate those products and decide whether another replenishment is needed.
+  </Step>
+</Steps>
+
+<Warning>
+  Only users authenticated with the `operador_inv` role can access any `/inventory` route. Unauthenticated users and users with other roles are redirected by the `RouteGuard` component.
+</Warning>

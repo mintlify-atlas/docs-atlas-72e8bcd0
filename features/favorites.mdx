@@ -1,0 +1,263 @@
+---
+title: "Save Products to Favorites in SansiStore"
+sidebarTitle: "Favorites"
+description: "Authenticated buyers can save products to a favorites list stored in Firestore, making it easy to revisit and add items to the cart."
+---
+
+The SansiStore favorites system lets buyers bookmark products they want to revisit later. A heart icon on every product card and on the product detail page toggles the item in or out of the favorites list. For guests, favorites are persisted in `localStorage`; on sign-in, local favorites are automatically merged with any Firestore favorites and synced back to the cloud.
+
+## Favorites Page (`/favoritos`)
+
+The `/favoritos` Astro page renders the same `<FeaturedProducts>` component used by the main catalog, but with `favoritesOnly={true}` and the title `"Mis favoritos"`. This means the full catalog UI — category filter, search, sort, offers toggle, and pagination — is available inside the favorites view.
+
+```astro
+// src/pages/favoritos.astro
+<FeaturedProducts
+  client:load
+  favoritesOnly={true}
+  title="Mis favoritos"
+  initialSearch={initialSearch}
+  initialCategory={initialCategory}
+  initialOffersOnly={initialOffersOnly}
+  initialSort={initialSort}
+  initialPage={Number.isNaN(initialPage) ? 1 : initialPage}
+/>
+```
+
+When `favoritesOnly` is `true`, `filterCatalogProducts()` restricts the product list to IDs present in the `favoriteIds` set returned by `useFavorites()`. A buyer with no saved favorites sees an empty-state card with a link back to `/productos`.
+
+---
+
+## The `useFavorites` Hook
+
+`useFavorites` (`src/features/favorites/hooks/useFavorites.ts`) is the single source of truth for all favorites state. It is consumed by `<ProductCard>`, the product detail page's `<ProductInfoSection>`, and `<FeaturedProducts>`.
+
+```ts
+const {
+  items,        // FavoriteItem[] — full list with createdAt timestamps
+  favoriteIds,  // Set<string>   — fast O(1) membership test
+  loading,      // boolean
+  error,        // string | null
+  isFavorite,   // (productId: string) => boolean
+  toggleFavorite, // (productId: string) => Promise<boolean>
+} = useFavorites();
+```
+
+### Initialization and Sync
+
+On mount, `useFavorites` subscribes to Firebase Auth state changes. When a user signs in:
+
+1. Local favorites are read from `localStorage` via `getLocalFavorites()`.
+2. Remote favorites are fetched from `users/{uid}/favoriteItems` via `getFavoriteItems()`.
+3. The two lists are **merged** — remote items take precedence, deduplication is by `productId`:
+   ```ts
+   function mergeFavorites(localItems, remoteItems): FavoriteItem[] {
+     const favoritesByProduct = new Map<string, FavoriteItem>();
+     [...remoteItems, ...localItems].forEach((item) => {
+       if (!item.productId || favoritesByProduct.has(item.productId)) return;
+       favoritesByProduct.set(item.productId, {
+         productId: item.productId,
+         createdAt: item.createdAt ?? Date.now(),
+       });
+     });
+     return [...favoritesByProduct.values()];
+   }
+   ```
+4. The merged list is written back to Firestore via `syncFavoritesToFirestore()` and saved to `localStorage`.
+
+When a user signs out, only local favorites are shown.
+
+### Toggle Behavior
+
+`toggleFavorite(productId)` is **optimistic** — it updates local state immediately, then synchronizes with Firestore. On error it rolls back to the previous state:
+
+```ts
+const toggleFavorite = async (productId: string) => {
+  const previousItems = items;
+  const currentlyFavorite = favoriteIds.has(productId);
+
+  // 1. Optimistic local update
+  const updated = currentlyFavorite
+    ? removeLocalFavorite(productId)
+    : addLocalFavorite(productId);
+  setItems(updated);
+
+  if (!uidRef.current) return true; // guest: localStorage only
+
+  try {
+    // 2. Sync to Firestore
+    if (currentlyFavorite) {
+      await deleteFavoriteItem(uidRef.current, productId);
+    } else {
+      await upsertFavoriteItem(uidRef.current, productId);
+    }
+    return true;
+  } catch {
+    // 3. Rollback on failure
+    saveLocalFavorites(previousItems);
+    setItems(previousItems);
+    setError('No se pudo actualizar el favorito. Intenta nuevamente.');
+    return false;
+  }
+};
+```
+
+---
+
+## The `<FavoriteButton>` Component
+
+`<FavoriteButton>` (`src/features/favorites/components/FavoriteButton.tsx`) renders the heart icon. It is used on product cards and on the product detail page. The button exposes `data-testid="favorite-button-{slug}"` for E2E testing:
+
+```ts
+// Usage in ProductCard
+<FavoriteButton
+  productId={product.id}
+  productName={product.name}
+  productSlug={product.slug}
+  isFavorite={productIsFavorite}
+  onToggle={toggleFavorite}
+  className="absolute right-3 top-3 z-20"
+/>
+```
+
+The button's `aria-label` reads either `"Agregar {name} a favoritos"` or `"Quitar {name} de favoritos"` depending on current state, and `aria-pressed` reflects the current favorite state (`"true"` / `"false"`).
+
+<Tip>
+  Because the catalog and favorites pages share the same `<FeaturedProducts>` component, favoriting a product from the `/favoritos` page using the heart button immediately removes it from the filtered list — no page reload required.
+</Tip>
+
+---
+
+## Firestore Data Model
+
+Favorites for authenticated users are stored in the `users/{uid}/favoriteItems` subcollection. Each document ID is the `productId`.
+
+```ts
+// src/features/favorites/types.ts
+interface FavoriteItem {
+  productId: string;
+  userId?: string;
+  createdAt: number; // Unix milliseconds
+}
+```
+
+### Firestore Operations
+
+<CodeGroup>
+```ts Fetch Favorites
+// src/features/favorites/services/favoritesFirestore.ts
+export async function getFavoriteItems(uid: string): Promise<FavoriteItem[]> {
+  const snap = await getDocs(favoritesCol(uid));
+  return snap.docs.map((doc) => ({
+    productId: String(doc.data().productId || doc.id),
+    userId: uid,
+    createdAt: doc.data().createdAt?.toMillis?.() ?? Date.now(),
+  }));
+}
+```
+
+```ts Add Favorite
+export async function upsertFavoriteItem(uid: string, productId: string) {
+  await setDoc(doc(db, 'users', uid, 'favoriteItems', productId), {
+    productId,
+    userId: uid,
+    createdAt: serverTimestamp(),
+  });
+}
+```
+
+```ts Remove Favorite
+export async function deleteFavoriteItem(uid: string, productId: string) {
+  await deleteDoc(doc(db, 'users', uid, 'favoriteItems', productId));
+}
+```
+
+```ts Sync All Favorites
+// Replaces all favoriteItems documents in a single writeBatch
+export async function syncFavoritesToFirestore(
+  uid: string,
+  items: FavoriteItem[]
+): Promise<void> {
+  const batch = writeBatch(db);
+  items.forEach((item) => {
+    const ref = doc(favoritesCol(uid), item.productId);
+    batch.set(ref, {
+      productId: item.productId,
+      userId: uid,
+      createdAt: serverTimestamp(),
+    });
+  });
+  await batch.commit();
+}
+```
+</CodeGroup>
+
+The Firestore query pattern for reading a user's favorites:
+
+```ts
+// Equivalent query structure used by getFavoriteItems()
+// Collection: users/{uid}/favoriteItems
+// No additional where clause needed — scoped to the user by path
+const snap = await getDocs(collection(db, 'users', uid, 'favoriteItems'));
+```
+
+For listing favorites across server-side admin views (not used in the buyer frontend), the equivalent top-level query would be:
+
+```ts
+query(
+  collectionGroup(db, 'favoriteItems'),
+  where('userId', '==', currentUser.uid)
+)
+```
+
+---
+
+## Guest vs. Authenticated Behavior
+
+<Tabs>
+  <Tab title="Guest User">
+    Favorites are stored in `localStorage` under the key `sansistore_favorites` as a JSON array of `FavoriteItem` objects. All toggle operations are purely local. The `/favoritos` page works fully for guests.
+
+    ```ts
+    // localStorage structure
+    [
+      { "productId": "leche-pil-natural-900-ml", "createdAt": 1751500000000 },
+      { "productId": "detergente-ola-5l", "createdAt": 1751499000000 }
+    ]
+    ```
+  </Tab>
+  <Tab title="Authenticated User">
+    On sign-in, local favorites are merged with Firestore and the combined list is synced. Subsequent toggles update both `localStorage` and `users/{uid}/favoriteItems` in Firestore. Favorites are available across all devices.
+  </Tab>
+</Tabs>
+
+<Note>
+  Unauthenticated users can browse favorites and add items to the cart from the `/favoritos` page without restrictions. Sign-in is only required for cloud sync and cross-device persistence.
+</Note>
+
+---
+
+## Adding to Cart from Favorites
+
+The favorites page uses the same `<ProductCard>` component as the main catalog, wrapped in a `<CartProvider>`. This means the **add-to-cart** button (rendered by `<ProductCard>`) is fully functional on `/favoritos` — buyers can add items directly to the cart without leaving the page.
+
+From the `<FeaturedProducts>` perspective, `favoritesOnly` is purely a filter predicate; the cart integration, quantity controls, and checkout flow are identical to the main catalog.
+
+---
+
+## End-to-End Tests
+
+Favorites behavior is covered by Playwright tests in `tests/favorites/favorites.spec.ts`:
+
+```
+Favorite products
+  ✓ allows anonymous users to add and persist a favorite product
+      — heart button aria-pressed="false" → click → localStorage has 1 item
+      — /favoritos shows "Mis favoritos" heading
+      — localStorage still has 1 item after navigation
+  ✓ shows anonymous favorite products in the favorites page
+      — seed localStorage → /favoritos → card with aria-pressed="true"
+  ✓ allows removing a favorite from the favorites page
+      — seed localStorage → /favoritos → click heart → localStorage has 0 items
+      — aria-pressed updates to "false" without reload
+```

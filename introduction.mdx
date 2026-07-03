@@ -1,0 +1,58 @@
+---
+title: "SansiStore: Multi-Role E-Commerce for UMSS"
+sidebarTitle: "Introduction"
+description: "SansiStore is a full-stack e-commerce platform for UMSS featuring five user roles, Firebase backend, and a React+Astro frontend deployed to Vercel."
+---
+
+SansiStore is a full-stack e-commerce web application built for **Universidad Mayor de San Simón (UMSS)**. It covers the complete purchase lifecycle — from product browsing and cart management, through seller order fulfillment and courier delivery, to inventory tracking and platform administration — inside a single, cohesive codebase. The app is deployed as a Progressive Web App (PWA) on Vercel, making it installable and partially offline-capable on any device.
+
+## Five User Roles
+
+SansiStore is built around five distinct roles, each with its own portal, default route, and set of permissions. A single Firebase Auth account can hold multiple roles simultaneously.
+
+| Role | Spanish name | Default Route | Responsibilities |
+|---|---|---|---|
+| **Buyer** | Comprador | `/productos` | Browse the catalog, manage a cart, place and track orders |
+| **Seller** | Vendedor | `/seller/created-orders` | Accept, package, and dispatch orders; manage daily collections and offers |
+| **Courier** | Mensajero | `/courier` | Pick up packaged orders and handle last-mile delivery with map support |
+| **Inventory Operator** | Operador de Inventario | `/inventory` | Register stock entries and exits, record movements and incidents |
+| **Admin** | Administrador | `/admin` | Full platform access: users, categories, analytics, audit logs, reconciliation |
+
+## Key Technologies
+
+- **Astro 6** — server-side rendered pages (`output: 'server'`) with the official Vercel adapter
+- **React 19** — interactive UI islands inside Astro pages
+- **Firebase Auth** — Google OAuth sign-in, restricted to `@umss.edu` accounts in production
+- **Cloud Firestore** — real-time NoSQL database with 18 top-level collections
+- **Firebase Storage** — product image hosting
+- **Tailwind CSS v4** — utility-first styles with custom `--theme-*` design tokens
+- **Nanostores** — lightweight shared state for cart and auth across islands
+- **vite-pwa / @vite-pwa/astro** — PWA manifest, service worker, and offline caching
+- **Vercel** — two environments: `main` branch → staging, `production` branch → live
+
+## Where to Go Next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Clone the repo, start Firebase emulators, seed test data, and run the dev server in under five minutes.
+  </Card>
+  <Card title="Architecture Overview" icon="sitemap" href="/architecture/overview">
+    Understand how Astro SSR, React islands, Firebase, and Tailwind fit together.
+  </Card>
+  <Card title="Product Catalog" icon="tag" href="/features/catalog">
+    How products, categories, search, and filtering work for buyers.
+  </Card>
+  <Card title="Seller Order Management" icon="box" href="/features/seller/order-management">
+    How sellers move orders through the fulfillment lifecycle.
+  </Card>
+  <Card title="Courier Delivery Flow" icon="truck" href="/features/courier/overview">
+    How couriers receive assignments, confirm pickups, and record delivery outcomes.
+  </Card>
+  <Card title="Admin Dashboard" icon="shield-halved" href="/features/admin/dashboard">
+    User management, audit logs, reconciliation, and platform analytics.
+  </Card>
+</CardGroup>
+
+<Note>
+  **@umss.edu domain restriction** — In production, the Google OAuth provider is configured with `hd: 'umss.edu'`, which forces the Google account chooser to filter to institutional accounts only. The `prompt: 'select_account'` parameter also prevents auto-login with a non-institutional cached account. During local development with the Auth emulator, this restriction is not enforced and any email can be used.
+</Note>

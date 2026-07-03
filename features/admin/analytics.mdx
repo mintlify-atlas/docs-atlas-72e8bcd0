@@ -1,0 +1,263 @@
+---
+title: "Sales Analytics and Reports in the SansiStore Admin Panel"
+sidebarTitle: "Analytics"
+description: "Admins access sales reports, top-product rankings, demand analysis, cancelled order reports, and courier performance metrics in SansiStore."
+---
+
+SansiStore's analytics module consolidates multiple report surfaces within the admin area. Rather than a single dashboard, each report type is an independent panel driven by its own Firestore service or server-side API route. All endpoints require a valid admin Bearer token and return JSON. The sections below describe each report panel, its data source, and the shape of data it exposes.
+
+---
+
+<Accordion title="Sales Reports">
+
+The `SalesReport` component visualises revenue over time using `getSalesByDateRange` from `salesService.ts`. It queries the `orders` collection filtered by `createdAt` within the selected date range and groups results into completed vs. cancelled buckets.
+
+**Completed statuses (generate revenue):** `ENTREGADO`, `COMPLETADO`, `PAGADO`  
+**Cancelled statuses:** `CANCELADO`, `NO ENTREGADO`
+
+The service returns a `SalesSummary` object:
+
+```typescript
+interface SalesSummary {
+  totalOrders: number;       // All orders in range (all statuses)
+  totalIncome: number;       // Sum of `total` for completed orders only
+  completedOrders: number;   // Count of completed orders
+  cancelledOrders: number;   // Count of cancelled orders
+  orders: SaleOrder[];       // Per-order detail
+}
+```
+
+The underlying API endpoint is `GET /api/admin/order_history?orderId=<id>`, which returns the full timeline for a single order including buyer, seller, items, payment, and delivery records.
+
+</Accordion>
+
+<Accordion title="Top Products">
+
+The `TopSellingProducts` component fetches the bestseller ranking from `GET /api/admin/top_products`. Products are ordered by `soldCount` descending from the `products` collection (filtered to `active == true`). Category names are resolved via a parallel `categories` collection query.
+
+**Query parameters:**
+
+| Parameter | Default | Max | Description |
+|-----------|---------|-----|-------------|
+| `limit` | `10` | `50` | Number of products to return |
+| `categoryId` | — | — | Filter to a specific category |
+
+**Response shape:**
+
+```json
+{
+  "products": [
+    {
+      "productId": "prod_abc123",
+      "name": "Empanada de queso",
+      "categoryId": "cat_001",
+      "categoryName": "Pastelería",
+      "price": 5.00,
+      "offerPrice": 4.00,
+      "hasOffer": true,
+      "imageUrl": "https://storage.example.com/product.jpg",
+      "soldCount": 342
+    }
+  ],
+  "total": 1
+}
+```
+
+The `useTopProducts` hook (`ventas/top-products/hooks/useTopProducts.ts`) wraps `getTopProducts` from `topProductServices.ts` and manages loading/error state for the UI component.
+
+</Accordion>
+
+<Accordion title="Demand Analysis">
+
+The `DemandPanel` component calls `getDemandByHour` from `demandService.ts`. It queries `orders` by `createdAt` range, counts orders per hour of day, and returns a `DemandSummary`:
+
+```typescript
+interface DemandSummary {
+  byHour: { hour: number; count: number; label: string }[];  // 24 entries (00:00–23:00)
+  totalOrders: number;
+  peakHour: number;    // Hour index (0–23) with most orders
+  minHour: number;     // Hour index with fewest orders (non-zero)
+  avgPerHour: number;  // Average orders per hour (1 decimal)
+  top5: { hour: number; count: number }[];
+}
+```
+
+An optional `categoryId` filter (passed as `DemandFilterInput.categoryId`) narrows the analysis to orders whose items belong to a specific category. Passing `'todas'` returns the full dataset.
+
+</Accordion>
+
+<Accordion title="Cancelled Orders Report">
+
+The `CancelledOrdersReport` component uses `getCancelledOrdersByPeriod` and `getCancelledOrdersSummary` from `cancelledOrdersService.ts`.
+
+**Period options:** `'day'` (today), `'week'` (last 7 days), `'month'` (current month from the 1st). Custom date ranges are also accepted via `startDate` / `endDate`.
+
+The service returns `CancelledOrder[]`:
+
+```typescript
+interface CancelledOrder {
+  orderId: string;
+  cancelledAt: Date;       // Falls back to updatedAt if cancelledAt is null
+  customerName: string;
+  total: number;
+  incidentReason: string | null;
+}
+```
+
+The summary endpoint `getCancelledOrdersSummary` returns:
+
+```typescript
+interface CancelledOrdersSummary {
+  totalCancelled: number;
+  cancellationPercentage: number;  // % of all orders that are cancelled
+}
+```
+
+</Accordion>
+
+<Accordion title="Messenger Performance">
+
+The `MessengerPerformancePage` surface is powered by `messengerPerformanceService.ts`. It reads the `deliveries` Firestore collection (statuses `delivered` / `DELIVERED`) and correlates deliveries to couriers via the `courierId` field.
+
+Two functions are exposed:
+
+**`getMessengerPerformanceByDay(messengerId, date)`** — Returns a `MessengerPerformanceReport` for a single courier on a given day:
+
+```typescript
+interface MessengerPerformanceReport {
+  messengerId: string;
+  messengerName: string;
+  date: string;                          // "YYYY-MM-DD"
+  totalDeliveries: number;
+  averageDeliveryTimeMinutes: number;
+  deliveries: MessengerDeliveryPerformance[];
+}
+```
+
+**`listenRecentCompletedDeliveries(callback)`** — Real-time Firestore listener returning the 10 most recently completed deliveries across all couriers, ordered by `deliveredAt` descending. Elapsed time is calculated as `deliveredAt - assignedAt` (or `createdAt` as fallback) in minutes.
+
+`getMessengers()` returns active users with `roles` containing `mensajero` for the courier filter dropdown.
+
+</Accordion>
+
+<Accordion title="Courier Sessions Overview">
+
+The `CourierSessionsValidation` component fetches from `GET /api/admin/courier_sessions` via `getPendingClosures` in `sessionsService.ts`. Sessions are sourced from the `messenger_shift_closures` Firestore collection.
+
+**Query parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `status` | `'closed'` | Filter by closure status (`closed`, `validated`, `rejected`) |
+| `limit` | `20` | Page size (max 50) |
+| `cursor` | — | Document ID of the last item for cursor-based pagination |
+
+**Response shape:**
+
+```json
+{
+  "closures": [
+    {
+      "id": "user-luis_2026-05-15",
+      "courierId": "uid_abc",
+      "courierName": "Luis Mamani",
+      "dateKey": "2026-05-15",
+      "status": "closed",
+      "startedAt": "2026-05-15T08:00:00.000Z",
+      "closedAt": "2026-05-15T18:30:00.000Z",
+      "summary": {
+        "completedCount": 12,
+        "pendingCount": 1,
+        "notDeliveredCount": 0,
+        "cancelledCount": 0,
+        "totalCollected": 480.00
+      },
+      "completedOrders": [],
+      "pendingOrders": [],
+      "incidentOrders": [],
+      "validatedBy": null,
+      "validatedByName": null,
+      "validatedAt": null,
+      "rejectionReason": null
+    }
+  ],
+  "hasMore": false,
+  "nextCursor": null
+}
+```
+
+To approve or reject a closure, `PATCH /api/admin/courier_sessions` is called with `{ closureId, action: "approve" | "reject", rejectionReason? }`. A closure that has already been `validated` or `rejected` cannot be modified (returns `409`).
+
+</Accordion>
+
+<Accordion title="Seller Activity Logs">
+
+The `SellerActivityPanel` subscribes to the `sellerActivityLogs` Firestore collection via `getSellerActivityLogs` in `sellerActivityService.ts`. Each document records a single action taken by a seller on an order.
+
+**`SellerActivityLog` fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `logId` | `string` | Firestore document ID |
+| `sellerId` | `string` | UID of the seller |
+| `sellerName` | `string` | Display name at time of action |
+| `sellerEmail` | `string` | Email at time of action |
+| `actionType` | `SellerActionType` | One of the action types below |
+| `orderId` | `string` | Affected order ID |
+| `previousStatus` | `string` | Order status before the action |
+| `newStatus` | `string` | Order status after the action |
+| `timestamp` | `Date` | Server-side timestamp |
+
+**`SellerActionType` values:**
+
+| Value | Label |
+|-------|-------|
+| `RESERVAR` | Reservar |
+| `CANCELAR` | Cancelar |
+| `MARCAR_LISTO` | Marcar listo |
+| `ASIGNAR` | Asignar mensajero |
+| `REASIGNAR` | Reasignar mensajero |
+| `MARCAR_PAGADA` | Marcar pagada |
+| `MARCAR_DEVUELTA` | Marcar devuelta |
+
+Filter support: by `sellerId`, `actionType`, and `startDate`/`endDate`. `getSellersFromLogs()` derives the unique seller list from existing log documents without querying the `users` collection.
+
+</Accordion>
+
+<Accordion title="Orders List View">
+
+The `useOrdersList` hook drives a paginated table of all orders via `GET /api/admin/orders_list`.
+
+**Query parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `status` | — | Filter by order status string |
+| `limit` | `20` | Page size (max 50) |
+| `cursor` | — | `orderId` of the last document for pagination |
+
+**Response shape:**
+
+```json
+{
+  "orders": [
+    {
+      "orderId": "uuid_FRIENDLYNAME",
+      "customerName": "María García",
+      "total": 45.50,
+      "status": "ENTREGADO",
+      "paymentStatus": "VERIFICADO",
+      "deliveryStatus": "delivered",
+      "createdAt": "2026-05-15T14:22:00.000Z",
+      "cancelledAt": null,
+      "incidentReason": null
+    }
+  ],
+  "hasMore": true,
+  "nextCursor": "uuid_NEXTORDER"
+}
+```
+
+Buyer names are resolved server-side by batch-fetching `users` documents in parallel, so `customerName` is always the human-readable display name when available.
+
+</Accordion>

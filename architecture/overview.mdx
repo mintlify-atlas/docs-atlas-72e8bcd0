@@ -1,0 +1,145 @@
+---
+title: "SansiStore Architecture and Tech Stack"
+sidebarTitle: "Overview"
+description: "How SansiStore combines Astro SSR, React, Firebase, and Tailwind CSS into a multi-role e-commerce platform deployed on Vercel."
+---
+
+SansiStore is built on a modern full-stack architecture that separates server-rendered HTML delivery (Astro) from interactive UI hydration (React islands), uses Firebase for every backend concern (auth, database, storage), and deploys the whole thing as a PWA on Vercel. This page explains how those pieces connect and why they were chosen.
+
+## Request Flow
+
+Every HTTP request enters through Vercel's edge network and is handled by Astro's server-side renderer. Server-only code — such as token verification and admin Firestore reads — runs inside Astro API routes using the Firebase Admin SDK. The rendered HTML is sent to the browser, where React islands hydrate for interactivity and use the Firebase client SDK directly for real-time data, auth state, and storage uploads.
+
+```
+Browser
+  │
+  ▼
+Vercel Edge / CDN
+  │
+  ▼
+Astro SSR (Node.js, output: 'server')
+  ├─ Astro pages & layouts (server-rendered HTML)
+  ├─ Astro API routes  ──► Firebase Admin SDK ──► Firestore / Auth (server)
+  │
+  ▼
+HTML + hydration scripts sent to browser
+  │
+  ▼
+React Islands (client)  ──► Firebase Client SDK ──► Firestore (real-time)
+                                                  └──► Firebase Auth
+                                                  └──► Firebase Storage
+```
+
+## Frontend Technologies
+
+<CardGroup cols={2}>
+  <Card title="Astro 6" icon="a" href="https://astro.build">
+    Configured with `output: 'server'` and the `@astrojs/vercel` adapter. Every page is server-rendered on each request, enabling per-request auth checks and personalised content without a separate API layer.
+  </Card>
+  <Card title="React 19" icon="react" href="https://react.dev">
+    Used for all interactive UI elements via Astro's islands architecture (`client:load`, `client:idle`). Only the components that need interactivity ship JavaScript to the browser.
+  </Card>
+  <Card title="Tailwind CSS v4" icon="paintbrush" href="https://tailwindcss.com">
+    Integrated via the `@tailwindcss/vite` plugin. The design system uses custom `--theme-*` CSS variables for brand colours, spacing tokens, and typography scales.
+  </Card>
+  <Card title="Nanostores" icon="database" href="https://github.com/nanostores/nanostores">
+    Lightweight, framework-agnostic stores (`@nanostores/react`) share cart contents and auth state between React islands without a heavier solution like Redux or Zustand.
+  </Card>
+  <Card title="React Hook Form + Zod" icon="check" href="https://react-hook-form.com">
+    All forms (checkout, user creation, product editing) are validated client-side with Zod schemas and managed by React Hook Form via `@hookform/resolvers/zod`.
+  </Card>
+  <Card title="Leaflet + React-Leaflet" icon="map-pin" href="https://react-leaflet.js.org">
+    Interactive delivery maps in the courier and checkout flows are rendered with `react-leaflet` v5, with tile layers served by OpenStreetMap.
+  </Card>
+</CardGroup>
+
+## Backend & Infrastructure
+
+<CardGroup cols={2}>
+  <Card title="Firebase Auth" icon="lock" href="https://firebase.google.com/docs/auth">
+    Google OAuth only. In production, `hd: 'umss.edu'` restricts sign-in to institutional accounts. Roles are stored as an array in the `users` Firestore document and are readable by the Admin SDK for server-side route guards.
+  </Card>
+  <Card title="Cloud Firestore" icon="fire" href="https://firebase.google.com/docs/firestore">
+    Real-time NoSQL database hosted in `southamerica-east1`. Houses 18 top-level collections covering users, products, orders, deliveries, payments, inventory, and audit logs. See the [Data Model](/architecture/data-model) for full schemas.
+  </Card>
+  <Card title="Firebase Storage" icon="image" href="https://firebase.google.com/docs/storage">
+    Hosts product images referenced by the `imageUrl` field on product documents. Uploads are performed client-side from the seller and admin portals.
+  </Card>
+  <Card title="Vercel Deployment" icon="triangle" href="https://vercel.com">
+    Two environments: `main` branch → `https://sansistore-test.vercel.app` (staging/QA) and `production` branch → `https://sansistore-umss.vercel.app` (live). Secrets are managed via Vercel Environment Variables.
+  </Card>
+  <Card title="PWA via @vite-pwa/astro" icon="mobile" href="https://vite-pwa-org.netlify.app/frameworks/astro">
+    Generates a Web App Manifest and Workbox service worker. The app is installable on Android and iOS, with static assets pre-cached for offline use. Theme colour: `#88b04b`; background: `#fffbf4`.
+  </Card>
+  <Card title="Firebase Emulators" icon="flask" href="https://firebase.google.com/docs/emulator-suite">
+    Local development uses the Firebase Emulator Suite (Firestore on port 8080, Auth on port 9099, Functions on 5001, Pub/Sub on 8085). The app auto-connects when `PUBLIC_APP_ENV !== 'production'`.
+  </Card>
+</CardGroup>
+
+## Feature Folder Structure
+
+The `src/` directory is organised by feature rather than by file type, keeping related pages, components, hooks, and utilities co-located:
+
+```
+src/
+├── features/
+│   ├── catalog/          # Product listing, search, filters
+│   ├── cart/             # Cart store, cart page, checkout flow
+│   ├── orders/           # Buyer order history and tracking
+│   ├── seller/           # Seller order management portal
+│   ├── mensajero/        # Courier delivery portal
+│   ├── inventory/        # Stock management portal
+│   ├── admin/            # Admin dashboard, user & category mgmt
+│   └── auth/             # Login, role routing, defaultRoute logic
+├── lib/
+│   ├── firebase.ts       # Client SDK init + emulator wiring
+│   └── firebase-admin.ts # Admin SDK init + emulator env vars
+├── components/           # Shared UI components
+├── layouts/              # Astro page layouts
+└── pages/                # Astro file-based routes
+```
+
+## Astro Configuration
+
+The full `astro.config.mjs` shows the active integrations and Vite plugins:
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import react from '@astrojs/react';
+import tailwindcss from '@tailwindcss/vite';
+import vercel from '@astrojs/vercel';
+import vitePwa from '@vite-pwa/astro';
+
+export default defineConfig({
+  output: 'server',
+  adapter: vercel(),
+
+  integrations: [
+    react(),
+    vitePwa({
+      registerType: 'autoUpdate',
+      manifest: {
+        name: 'SansiStore',
+        short_name: 'SansiStore',
+        theme_color: '#88b04b',
+        background_color: '#fffbf4',
+        display: 'standalone',
+        lang: 'es',
+        // ...icons
+      },
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
+      },
+    }),
+  ],
+
+  vite: {
+    plugins: [tailwindcss()],
+  },
+});
+```
+
+<Info>
+  `devOptions.enabled: false` in the PWA config disables the service worker in development mode to avoid stale-cache issues during hot-reload cycles. The service worker is only registered in production builds.
+</Info>

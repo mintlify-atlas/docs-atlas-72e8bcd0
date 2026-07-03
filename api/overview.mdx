@@ -1,0 +1,102 @@
+---
+title: "SansiStore Server API: Endpoints and Authentication"
+sidebarTitle: "Overview"
+description: "SansiStore exposes server-side API routes for admin and seller operations, authenticated via Firebase Admin SDK using ID tokens in the Authorization header."
+---
+
+SansiStore exposes a set of server-side API routes built as [Astro server endpoints](https://docs.astro.build/en/guides/endpoints/). These routes are internal to the platform — they are used exclusively by the frontend and are not a public third-party API. All routes live under `/api/` and require a valid Firebase ID token to access.
+
+## Authentication
+
+Every API request must include a Firebase ID token in the `Authorization` header using the `Bearer` scheme:
+
+```
+Authorization: Bearer <Firebase_ID_Token>
+```
+
+The server verifies the token using the **Firebase Admin SDK** (`src/lib/firebase-admin.ts`). After verifying the token, the endpoint fetches the caller's Firestore user document and checks the `roles` array to enforce role-based access control.
+
+### Firebase Admin Initialization
+
+The Admin SDK is initialized once and exported as `adminAuth` and `adminDb`:
+
+```typescript
+// src/lib/firebase-admin.ts
+import { cert, getApps, initializeApp, applicationDefault } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import { getFirestore } from 'firebase-admin/firestore';
+
+function getCredential() {
+  if (useEmulators) {
+    return undefined; // emulators do not require credentials
+  }
+  if (serviceAccountJson) {
+    return cert(JSON.parse(serviceAccountJson)); // FIREBASE_SERVICE_ACCOUNT_KEY
+  }
+  if (projectId && clientEmail && privateKey) {
+    return cert({ projectId, clientEmail, privateKey }); // individual env vars
+  }
+  return applicationDefault(); // fallback: ADC
+}
+
+export const adminAuth = getAuth(app);
+export const adminDb   = getFirestore(app);
+```
+
+The SDK resolves credentials in this order:
+
+1. **`FIREBASE_SERVICE_ACCOUNT_KEY`** — a JSON string of the full service account key.
+2. **`FIREBASE_CLIENT_EMAIL` + `FIREBASE_PRIVATE_KEY`** — individual environment variables. `FIREBASE_PRIVATE_KEY` must have `\n` escaped as a literal backslash-n in the `.env` file.
+3. **Application Default Credentials** — used automatically on Google Cloud / Vercel.
+4. **Emulators** — when `PUBLIC_APP_ENV` is not `production`, the SDK points to the local Firestore (`127.0.0.1:8080`) and Auth (`127.0.0.1:9099`) emulators and does not require credentials.
+
+### Example Authenticated Request
+
+```bash
+curl -H 'Authorization: Bearer <ID_TOKEN>' \
+  https://sansistore-umss.vercel.app/api/admin/order_history?orderId=abc123
+```
+
+Obtain an ID token by calling `getIdToken()` on a Firebase `User` object in the browser SDK, or via the Firebase Auth REST API.
+
+## Available Endpoints
+
+<CardGroup cols={2}>
+  <Card title="Admin Endpoints" icon="shield" href="/api/admin-endpoints">
+    Order history, orders list, courier sessions, top products, and user management. Requires the `admin` role.
+  </Card>
+  <Card title="Seller Endpoints" icon="store" href="/api/seller-endpoints">
+    Pending orders and daily cash collection summaries for the authenticated seller. Requires the `vendedor` role.
+  </Card>
+</CardGroup>
+
+### Full Endpoint List
+
+| Method | Path | Role | Description |
+|---|---|---|---|
+| `GET` | `/api/admin/order_history` | `admin` | Full history and timeline for a single order |
+| `GET` | `/api/admin/orders_list` | `admin` | Paginated list of all orders with optional status filter |
+| `GET` | `/api/admin/courier_sessions` | `admin` | List of courier shift closures |
+| `PATCH` | `/api/admin/courier_sessions` | `admin` | Approve or reject a courier shift closure |
+| `GET` | `/api/admin/top_products` | `admin` | Top-selling active products by `soldCount` |
+| `GET` | `/api/users` | `admin` | List all users with optional role/search filters |
+| `POST` | `/api/users` | `admin` | Create a new UMSS user |
+| `PATCH` | `/api/users` | `admin` | Update an existing user |
+| `GET` | `/api/seller/pending-orders` | `vendedor` | Pending orders assigned to the authenticated seller |
+| `GET` | `/api/seller/daily-collections` | `vendedor` | Daily cash collection summary for the seller |
+
+## Error Responses
+
+All endpoints return JSON with a consistent error shape:
+
+| Status | Meaning |
+|---|---|
+| `401 Unauthorized` | No token provided |
+| `403 Forbidden` | Token valid but caller lacks the required role |
+| `400 Bad Request` | Missing or invalid query parameters |
+| `404 Not Found` | Requested resource does not exist |
+| `500 Internal Server Error` | Unexpected server-side error |
+
+```json
+{ "error": "Forbidden" }
+```
