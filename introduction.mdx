@@ -12,7 +12,7 @@ SansiStore is built around five distinct roles, each with its own portal, defaul
 
 | Role | Spanish name | Default Route | Responsibilities |
 |---|---|---|---|
-| **Buyer** | Comprador | `/productos` | Browse the catalog, manage a cart, place and track orders |
+| **Buyer** | Comprador | `/` | Browse the catalog, manage a cart, place and track orders |
 | **Seller** | Vendedor | `/seller/created-orders` | Accept, package, and dispatch orders; manage daily collections and offers |
 | **Courier** | Mensajero | `/courier` | Pick up packaged orders and handle last-mile delivery with map support |
 | **Inventory Operator** | Operador de Inventario | `/inventory` | Register stock entries and exits, record movements and incidents |
@@ -23,7 +23,7 @@ SansiStore is built around five distinct roles, each with its own portal, defaul
 - **Astro 6** — server-side rendered pages (`output: 'server'`) with the official Vercel adapter
 - **React 19** — interactive UI islands inside Astro pages
 - **Firebase Auth** — Google OAuth sign-in, restricted to `@umss.edu` accounts in production
-- **Cloud Firestore** — real-time NoSQL database with 18 top-level collections
+- **Cloud Firestore** — real-time NoSQL database with 18 collections (some as subcollections)
 - **Firebase Storage** — product image hosting
 - **Tailwind CSS v4** — utility-first styles with custom `--theme-*` design tokens
 - **Nanostores** — lightweight shared state for cart and auth across islands

@@ -1,7 +1,7 @@
 ---
-title: "Track and Manage Your SansiStore Orders"
+title: "Track and Manage Your Purchase Orders in SansiStore"
 sidebarTitle: "Orders"
-description: "Buyers can view order history, check delivery status, and receive notifications at every step of the SansiStore order lifecycle."
+description: "Buyers can view full order history, track delivery status, and receive real-time notifications at every step of the SansiStore order lifecycle."
 ---
 
 Once a buyer confirms their cart, SansiStore creates an order record in Firestore and begins tracking it through a multi-stage lifecycle. The order history dashboard at `/mis-pedidos` gives buyers a live view of all their purchases, lets them confirm delivery reception, and provides access to return requests — all protected by the `comprador` role guard.
@@ -31,7 +31,7 @@ A tab bar switches between the **Pedidos** list (rendered by `<OrderList>`) and 
 
 When an order's status transitions to `ENTREGADO` (or `deliveryStatus` becomes `DELIVERED`) while the buyer has the page open, a toast notification slides in from the top-right corner:
 
-```
+```text
 ✅ Tu pedido fue entregado
    Pedido 3dg-zjs
 ```
@@ -90,11 +90,17 @@ Orders progress through a set of statuses defined in `OrderStatus` (`src/feature
   <Accordion title="RESERVADO — Claimed by seller">
     Set by `reserveOrder()`. The seller has accepted the order; `stockAvailable` is reduced transactionally. The buyer's order card updates in real time.
   </Accordion>
+  <Accordion title="PENDIENTE — Pending seller action">
+    The order is placed but awaiting seller review or action. Treated as an active order in buyer dashboard counters.
+  </Accordion>
   <Accordion title="EMPAQUETADO — Packed">
     The order has been prepared and packed, awaiting courier assignment.
   </Accordion>
   <Accordion title="LISTO — Ready for pickup">
     Set by `readyOrder()`. The courier can now pick up the order from the seller.
+  </Accordion>
+  <Accordion title="PENDIENTE-ASIGNACION — Awaiting courier">
+    The order is packed and ready but no courier has been assigned yet. Intermediate state between `LISTO` and `ASIGNADO`.
   </Accordion>
   <Accordion title="ASIGNADO / ACEPTADO — Courier assigned">
     A delivery has been created and assigned to a courier. The courier has accepted the delivery.
@@ -118,7 +124,7 @@ Orders progress through a set of statuses defined in `OrderStatus` (`src/feature
     Set by `rejectOrder()`. Requires an `incidentReason`.
   </Accordion>
   <Accordion title="PAGADO — Payment validated">
-    Set by `paidOrder()` after the seller confirms receipt of payment. `stockTotal` and `stockReserved` are decremented in a transaction. Only deliverd orders can be moved to this status.
+    Set by `paidOrder()` after the seller confirms receipt of payment. `stockTotal` and `stockReserved` are decremented in a transaction. Only delivered orders can be moved to this status.
   </Accordion>
   <Accordion title="CERRADO — Closed">
     Terminal state for fully resolved orders.
@@ -252,7 +258,7 @@ Each return is rendered in a `<ReturnCard>` showing the order ID, reason, descri
 
 Order pages are covered by Playwright tests in `tests/orders/my-orders.spec.ts`:
 
-```
+```text
 Mis pedidos - comprador (Ana Mamani)  [serial]
   ✓ el menu lleva a Mi Perfil y de ahi a Mis pedidos
       — /mi-perfil → "Ver mis compras" link → /mis-pedidos

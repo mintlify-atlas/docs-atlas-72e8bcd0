@@ -1,7 +1,7 @@
 ---
 title: "SansiStore UI Standards: Tokens, Components, and Layout"
 sidebarTitle: "UI Standards"
-description: "SansiStore enforces theme tokens for dark mode support, Inter as the sole font, max-w-7xl layout width, and Lucide icons — never hardcoded Tailwind colors."
+description: "SansiStore enforces theme tokens for dark mode, Inter as the sole font, max-w-7xl layout width, and Lucide icons — never hardcoded Tailwind colors."
 ---
 
 SansiStore's UI is built on a set of enforced conventions that keep every screen consistent and dark-mode-ready with zero extra effort. The rules below come directly from `UI.md` and `src/styles/global.css` — follow them on every component you touch.
@@ -36,11 +36,11 @@ All tokens are defined in `src/styles/global.css` and switch values automaticall
 | `bg-(--theme-secondary-bg)` | `#e8e5d8` | Chips, subtle backgrounds |
 | `border-(--theme-border)` | `rgba(136,176,75,0.15)` | All borders |
 | `text-primary` / `bg-primary` | `#88b04b` | Brand green (actions, highlights) |
-| `bg-(--theme-error-bg)` + `text-(--theme-error)` | red scale | Error states |
-| `bg-(--theme-success-bg)` + `text-(--theme-success)` | green scale | Success states |
-| `bg-(--theme-warning-bg)` + `text-(--theme-warning)` | amber scale | Warning states |
-| `bg-(--theme-info-bg)` + `text-(--theme-info)` | blue scale | Informational states |
-| `bg-(--theme-danger-bg)` + `text-(--theme-danger)` | red scale | Danger / destructive actions |
+| `bg-(--theme-error-bg)` + `border-(--theme-error-border)` + `text-(--theme-error)` | red scale | Error states |
+| `bg-(--theme-success-bg)` + `border-(--theme-success-border)` + `text-(--theme-success)` | green scale | Success states |
+| `bg-(--theme-warning-bg)` + `border-(--theme-warning-border)` + `text-(--theme-warning)` | amber scale | Warning states |
+| `bg-(--theme-info-bg)` + `border-(--theme-info-border)` + `text-(--theme-info)` | blue scale | Informational states |
+| `bg-(--theme-danger-bg)` + `border-(--theme-danger-border)` + `text-(--theme-danger)` | red scale | Danger / destructive actions |
 
 For dimmed text use `text-(--theme-text) opacity-60` — not `text-gray-500` or `text-gray-400`.
 

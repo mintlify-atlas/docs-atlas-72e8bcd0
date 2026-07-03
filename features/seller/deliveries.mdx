@@ -220,6 +220,8 @@ Orders in `NO ENTREGADO` status surface on `/seller/failed-orders`. The `FailedO
       failedAt: null,
       cancelledAt: null,
       stockRestored: false,
+      stockRestoredAt: null,
+      stockRestoredBy: null,
       reservedAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -234,7 +236,10 @@ Orders in `NO ENTREGADO` status surface on `/seller/failed-orders`. The `FailedO
       deliveryId: null,
       deliveryStatus: null,
       cancelledAt: serverTimestamp(),
-      incidentReason: 'Cancelado por vendedor tras entrega fallida',
+      incidentReason:
+        typeof orderData.incidentReason === 'string' && orderData.incidentReason.trim()
+          ? orderData.incidentReason
+          : 'Cancelado por vendedor tras entrega fallida',
       stockRestored: true,
       stockRestoredAt: serverTimestamp(),
       stockRestoredBy: sellerId,

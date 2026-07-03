@@ -1,5 +1,5 @@
 ---
-title: "Seller Order Management Workflow in SansiStore"
+title: "Seller Order Management Workflow in SansiStore UMSS"
 sidebarTitle: "Order Management"
 description: "Sellers process incoming orders through a multi-step workflow: confirm, package, assign couriers, handle incidents, and track history."
 ---
@@ -142,17 +142,25 @@ Exceptions branch off into `NO ENTREGADO`, `RECHAZADO`, or `CANCELADO`.
 
     ```ts
     // src/features/seller/services/assignCourierToDelivery.ts
+    const deliveryCode = `DEL-${Date.now().toString(36).toUpperCase()}`;
+
     tx.set(deliveryRef, {
       orderId,
-      courierId,
+      courierId: courierId,
       status: 'assigned',
-      deliveryCode: `DEL-${Date.now().toString(36).toUpperCase()}`,
+      deliveryCode,
       attemptNumber: 1,
       incidentReason: null,
       evidenceUrl: null,
       failureReason: null,
       amountCollected: null,
       customerConfirmed: false,
+      customerConfirmedAt: null,
+      pickedUpAt: null,
+      inTransitAt: null,
+      deliveredAt: null,
+      failedAt: null,
+      reprogrammedAt: null,
       createdAt: serverTimestamp(),
       assignedAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -178,19 +186,25 @@ Each order has a dedicated page at `/seller/orders/[id]` that shows the full `Or
 
 ```ts
 // src/features/seller/services/getOrders.ts
-export const getOrders = ({ status, ordby, db, sellerId, onData, onError }: Params): Unsubscribe => {
+export const getOredrs = ({ status, ordby, db, sellerId, onData, onError }: Params): Unsubscribe => {
   const qOrders = query(
     collection(db, 'orders'),
     where('sellerId', '==', sellerId),
     where('status', '==', status),
     orderBy('updatedAt', ordby),
   );
-  return onSnapshot(qOrders, async (snap) => {
-    const orders = snap.docs.map((d) => docToOrder(d.id, d.data() as OrderDoc));
-    const enriched = await enrichOrdersWithData(db, orders);
-    onData(enriched);
-  });
+  return onSnapshot(
+    qOrders,
+    async (snap) => {
+      const orders = snap.docs.map((d) => docToOrder(d.id, d.data() as OrderDoc));
+      const enriched = await enrichOrdersWithData(db, orders);
+      onData(enriched);
+    },
+    () => onError('Ocurrio un error al cargar los pedidos'),
+  );
 };
+
+export const getOrders = getOredrs;
 ```
 
 <Note>

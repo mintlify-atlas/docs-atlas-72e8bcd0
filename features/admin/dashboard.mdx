@@ -1,7 +1,7 @@
 ---
-title: "Admin Dashboard: Monitor SansiStore Operations"
+title: "SansiStore Admin Dashboard: Operations at a Glance"
 sidebarTitle: "Dashboard"
-description: "The SansiStore admin dashboard provides KPIs, order summaries, seller activity, and courier session status in a single operations view."
+description: "SansiStore's admin dashboard shows four live KPIs, alerts for reserved and cancelled orders, a recent-orders widget, and shortcuts to all admin sections."
 ---
 
 The SansiStore admin panel is the operational hub for platform administrators at UMSS. Accessible at `/admin` exclusively by users with the `admin` role, it renders the `AdminProtectedLayout` component which enforces role-based access before mounting any sub-section. The `DashboardPanel` component is the default landing view — it aggregates real-time KPIs from Firestore on mount and surfaces actionable alerts when reserved orders or cancellations require attention.

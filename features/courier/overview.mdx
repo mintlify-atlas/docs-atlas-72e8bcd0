@@ -17,9 +17,9 @@ SansiStore's courier module provides users with the `mensajero` role a mobile-op
     Session overview with three summary metrics: pending deliveries, deliveries completed today, and total cash to collect. Lists active pending orders in a table with inline actions for registering payment and marking as delivered.
   </Card>
   <Card title="Active deliveries" icon="truck" href="https://sansistore-umss.vercel.app/courier">
-    The messenger-facing view uses `MessengerDashboard` at `/courier`, which sections orders into **Pedidos asignados**, **Pedidos aceptados**, and **Gestión Entregas** tabs. Each section renders order cards with contextual action buttons.
+    The messenger-facing view uses `DeliveryActionsPanel` at `/courier`, which wraps `MessengerDashboard` and organises orders into five sidebar tabs: **Gestión Entregas**, **Pedidos aceptados**, **Reprogramados**, **No entregados**, and **Entregados**. Each tab renders order cards with contextual action buttons.
   </Card>
-  <Card title="Delivery detail" icon="package-check" href="https://sansistore-umss.vercel.app/courier">
+  <Card title="Delivery detail" icon="package-check" href="https://sansistore-umss.vercel.app/delivery/order/[orderId]">
     Individual delivery page rendered by `DeliveryOrderDetailPage`. Shows full order info, customer location map link, cash amount to collect, and status-transition action buttons. Accessible at `/delivery/order/{orderId}`.
   </Card>
   <Card title="Buyer map" icon="map-pin" href="https://sansistore-umss.vercel.app/mapa">
@@ -59,14 +59,22 @@ The eligibility check is enforced in two layers:
 
 ```typescript
 // Only accepted and in_transit count as an active delivery.
-const ACTIVE_DELIVERY_STATUSES = ['accepted', 'in_transit'];
+const ACTIVE_DELIVERY_STATUSES: ReadonlyArray<DeliveryStatus> = [
+  'accepted',
+  'in_transit',
+];
 
+export function hasActiveMessengerDelivery(
+  orders: ReadonlyArray<Pick<MessengerOrder, 'deliveryStatus'>>
+): boolean {
+  return orders.some(isActiveDelivery);
+}
+
+/** Indicates whether the courier can accept an assigned order. */
 export function canAcceptAssignedOrder(
   orders: ReadonlyArray<Pick<MessengerOrder, 'deliveryStatus'>>
 ): boolean {
-  return !orders.some(order =>
-    ACTIVE_DELIVERY_STATUSES.includes(order.deliveryStatus)
-  );
+  return !hasActiveMessengerDelivery(orders);
 }
 ```
 
@@ -105,7 +113,7 @@ Currency amounts are formatted with `formatBolivianos`, which rounds floating-po
 
 <Steps>
   <Step title="Start the shift">
-    The courier logs in at `/courier`. The `MessengerDashboard` component subscribes to all `deliveries` where `courierId == currentUser.uid`. Any orders in `assigned` status appear immediately in the **Pedidos asignados** section.
+    The courier logs in at `/courier`. The `DeliveryActionsPanel` component (which wraps `MessengerDashboard`) subscribes to all `deliveries` where `courierId == currentUser.uid`. Any orders in `assigned` status appear immediately in the **Gestión Entregas** tab.
   </Step>
   <Step title="Accept assigned deliveries">
     The courier taps **Aceptar pedido** on an assigned order card. A confirmation dialog (`ConfirmAssignedOrderActionModal`) appears before any write. On confirmation, `acceptMessengerOrder` first runs the server-side eligibility check, then transitions the delivery to `accepted`.

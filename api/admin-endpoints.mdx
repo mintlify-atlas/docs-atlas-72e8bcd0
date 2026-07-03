@@ -1,7 +1,7 @@
 ---
-title: "Admin API Endpoints Reference for SansiStore"
+title: "SansiStore Admin API Endpoints: Complete Reference"
 sidebarTitle: "Admin Endpoints"
-description: "Server-side admin API routes for SansiStore: order history, orders list, courier sessions, top products, and user management."
+description: "Server-side admin API routes for SansiStore: order history, orders list, courier sessions, top products, and user management. Requires the admin role."
 ---
 
 Admin endpoints require a Firebase ID token belonging to a user whose `roles` array in Firestore contains `"admin"`. Pass the token in every request as `Authorization: Bearer <ID_TOKEN>`.
@@ -327,7 +327,7 @@ Returns all platform users, optionally filtered by role or searched by name/emai
   - `displayName` — full name
   - `phoneNumber` — 8-digit Bolivian mobile number
   - `ci` — national identity number
-  - `internalPhone` — optional internal extension
+  - `internalPhone` — internal extension (empty string if not set)
   - `roles` — array of role strings
   - `isActive` — boolean
   - `createdBy` — UID of the admin who created the account

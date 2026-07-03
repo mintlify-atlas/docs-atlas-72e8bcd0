@@ -43,7 +43,7 @@ SansiStore uses a single `.env` file at the repository root to drive both local-
     2. **Individual fields** — split the service account into three separate variables:
        ```
        FIREBASE_CLIENT_EMAIL=firebase-adminsdk@sansistore.iam.gserviceaccount.com
-       FIREBASE_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n..."
+       FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n..."
        ```
        Note: Vercel stores the private key with literal `\n` escape sequences. The `firebase-admin.ts` file automatically converts them with `.replace(/\\n/g, '\n')`.
 

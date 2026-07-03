@@ -60,7 +60,7 @@ React Islands (client)  ──► Firebase Client SDK ──► Firestore (real-
     Google OAuth only. In production, `hd: 'umss.edu'` restricts sign-in to institutional accounts. Roles are stored as an array in the `users` Firestore document and are readable by the Admin SDK for server-side route guards.
   </Card>
   <Card title="Cloud Firestore" icon="fire" href="https://firebase.google.com/docs/firestore">
-    Real-time NoSQL database hosted in `southamerica-east1`. Houses 18 top-level collections covering users, products, orders, deliveries, payments, inventory, and audit logs. See the [Data Model](/architecture/data-model) for full schemas.
+    Real-time NoSQL database hosted in `southamerica-east1`. Houses 16 top-level collections (plus 2 subcollections) covering users, products, orders, deliveries, payments, inventory, and audit logs. See the [Data Model](/architecture/data-model) for full schemas.
   </Card>
   <Card title="Firebase Storage" icon="image" href="https://firebase.google.com/docs/storage">
     Hosts product images referenced by the `imageUrl` field on product documents. Uploads are performed client-side from the seller and admin portals.

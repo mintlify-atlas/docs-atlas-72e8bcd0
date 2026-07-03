@@ -1,7 +1,7 @@
 ---
-title: "Seller API Endpoints Reference for SansiStore"
+title: "SansiStore Seller API Endpoints: Complete Reference"
 sidebarTitle: "Seller Endpoints"
-description: "Server-side seller API routes for SansiStore: retrieve pending orders and daily cash collection summaries for the vendedor role."
+description: "Server-side seller API routes for SansiStore: retrieve pending orders and daily cash collection summaries for the authenticated vendedor role."
 ---
 
 Seller endpoints are available to users whose `roles` array in Firestore contains `"vendedor"`. The authenticated seller's UID is derived from the verified token, so both endpoints always return data scoped to the caller — there is no `sellerId` query parameter.

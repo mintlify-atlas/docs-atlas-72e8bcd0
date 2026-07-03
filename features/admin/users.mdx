@@ -1,7 +1,7 @@
 ---
-title: "User Management and Role Assignment in SansiStore"
+title: "User Management and Role Assignment in SansiStore Admin"
 sidebarTitle: "Users"
-description: "Admins manage user accounts, assign roles, enable or disable accounts, and review access logs for all SansiStore platform users."
+description: "Admins create and manage user accounts, assign platform roles, enable or disable access, and review the full access-log audit trail in SansiStore."
 ---
 
 User management in SansiStore is an admin-only operation. The `UserManagement` component, accessible at `/admin/users/usuarios`, provides a searchable table of all registered accounts with inline controls for editing roles, toggling account status, and registering new users. Every account is stored in the `users` Firestore collection using the Firebase Auth UID as the document ID.
@@ -72,6 +72,7 @@ Returns all users sorted alphabetically by `displayName`. Supports optional quer
       "displayName": "Jane Doe",
       "phoneNumber": "71234567",
       "ci": "12345678",
+      "internalPhone": "",
       "roles": ["vendedor"],
       "isActive": true,
       "createdBy": "adminUid",
@@ -90,7 +91,7 @@ Creates a new Firebase Auth user and the corresponding Firestore document. The A
 
 ### `PATCH /api/users`
 
-Updates an existing user. Accepts `uid` (required) plus any subset of `displayName`, `email`, `phoneNumber`, `roles`, `isActive`. Updating `roles` also refreshes the Firebase Auth custom claims.
+Updates an existing user. Accepts `uid` (required) plus any subset of `displayName`, `email`, `phoneNumber`, `roles`, `isActive`. The `ci` field cannot be updated via this endpoint. Updating `roles` also refreshes the Firebase Auth custom claims.
 
 ## Email Validation
 

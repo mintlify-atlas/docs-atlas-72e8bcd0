@@ -1,5 +1,5 @@
 ---
-title: "Browse and Search the SansiStore Product Catalog"
+title: "Browse and Search the SansiStore Product Catalog Pages"
 sidebarTitle: "Catalog"
 description: "The SansiStore product catalog lets buyers browse by category, view featured products, read reviews, and see real-time stock availability."
 ---
@@ -119,7 +119,7 @@ The detail page is powered by the `<ProductDetail>` component (`src/components/P
 
 | Component | Responsibility |
 |---|---|
-| `BreadcrumbNav` | Renders an `aria-label="Ruta de navegación"` nav with links to **Productos** → **Detalle** |
+| `BreadcrumbNav` | Renders an `aria-label="Ruta de navegación"` nav with links to **Inicio** → **Productos** → **Detalle** |
 | `ProductImageSection` | Displays the full product image with fallback to `/product-placeholder.svg` |
 | `ProductInfoSection` | Name, description, price / offer price, stock count, add-to-cart button, add-to-favorites button |
 | `ReviewSection` | Loads and displays all reviews; shows the `ReviewForm` for authenticated users |
@@ -130,7 +130,7 @@ The detail page is powered by the `<ProductDetail>` component (`src/components/P
 
 When `hasOffer` is `true` and `offerPrice` is a positive number, the detail page shows:
 
-```
+```text
 Bs 109.00    (-11%)
 ~~Bs 123.00~~   ← original price, strikethrough
 ```
@@ -151,7 +151,7 @@ Bs 109.00    (-11%)
 Authenticated buyers can post a star rating (1–5) and a comment via `ReviewForm`. All reviews are shown in `ReviewSection` with an aggregate average score. A product with no reviews displays **Sin calificaciones** and the message *Este producto aún no tiene comentarios*.
 
 <Note>
-  Reviews are stored in the `reviews` subcollection of the product document. The detail page shows `4.5 de 5` aggregate score and individual half-star indicators for each review.
+  Reviews are stored in the top-level `reviews` Firestore collection, not as a subcollection of the product document. Each review document contains a `productId` field that links it to the corresponding product. The detail page shows `4.5 de 5` aggregate score and individual half-star indicators for each review.
 </Note>
 
 ---
@@ -199,7 +199,7 @@ const isOutOfStock = effectiveStock <= 0;
 
 The catalog is covered by Playwright tests in `tests/products/`:
 
-```
+```text
 product-list.spec.ts
   ✓ load products page                  — title, CategoryFilter, Offers button visible
   ✓ Ofertas                             — ?offers=true activates aria-pressed="true"

@@ -186,7 +186,7 @@ match /paymentActivityLogs/{logId} {
 ```
 
 <Note>
-  The current `firestore.rules` file applies a broad `allow read, write` rule to all collections other than `paymentActivityLogs`, with a hard expiry date of **2025-05-25**. After that date, all client writes and reads to unguarded collections will be denied. Proper per-collection rules using `hasRole()` should be implemented before that deadline.
+  The current `firestore.rules` file applies a broad `allow read, write` rule to all collections other than `paymentActivityLogs`, with a hard expiry date of **2027-05-25**. After that date, all client writes and reads to unguarded collections will be denied. Proper per-collection rules using `hasRole()` should be implemented before that deadline.
 </Note>
 
 ## Role Enforcement Summary

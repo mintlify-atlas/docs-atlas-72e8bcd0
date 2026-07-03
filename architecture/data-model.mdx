@@ -361,5 +361,5 @@ Records every seller-initiated status change on an order, providing a full audit
 ---
 
 <Note>
-  **Firestore security rules** — the current `firestore.rules` file applies a broad allow rule to all collections (except `paymentActivityLogs`) that expires on **2025-05-25**. Before that date, proper per-collection, per-role rules should be implemented. The `paymentActivityLogs` collection already has strict rules: only admins can read, any authenticated user can create (subject to a strict schema validation), and updates/deletes are permanently denied. See [Roles & Permissions](/architecture/roles-permissions) for the `hasRole()` helper used in the rules.
+  **Firestore security rules** — the current `firestore.rules` file applies a broad allow rule to all collections (except `paymentActivityLogs`) that expires on **2027-05-25**. Before that date, proper per-collection, per-role rules should be implemented. The `paymentActivityLogs` collection already has strict rules: only admins can read, any authenticated user can create (subject to a strict schema validation), and updates/deletes are permanently denied. See [Roles & Permissions](/architecture/roles-permissions) for the `hasRole()` helper used in the rules.
 </Note>

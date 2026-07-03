@@ -1,5 +1,5 @@
 ---
-title: "Track Stock Movements and Entries in SansiStore"
+title: "Track Inventory Movements and Stock Entries in SansiStore"
 sidebarTitle: "Movements"
 description: "Every inventory change in SansiStore is logged as a movement with operator ID, type, reason, and quantity for full audit traceability."
 ---
@@ -92,8 +92,8 @@ For each failed order, an operator can trigger **stock restoration**:
 
 1. The `restoreStockForOrder` service runs a Firestore `runTransaction`.
 2. Inside the transaction, for each order item:
-   - `stockReserved` on the `inventory` document is decremented by `item.quantity`.
-   - A new `ENTRADA` movement is written to `inventoryMovements` with the reason `Reposición por pedido fallido {orderId}`.
+   - `stockReserved` on the `inventory` document is decremented by `item.quantity`, releasing the reservation back into available stock. `stockAvailable` and `stockTotal` are not modified because the units were never physically removed from the warehouse.
+   - A new `ENTRADA` movement is written to `inventoryMovements` with the reason `Reposición por pedido fallido {orderId}` to record the reservation release for audit purposes.
 3. The order document is updated with `stockRestored: true`, `stockRestoredBy`, and `stockRestoredAt` to prevent duplicate restorations.
 
 <Warning>

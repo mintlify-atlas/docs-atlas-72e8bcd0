@@ -17,8 +17,8 @@ graph TD
   D --> F[delivered]
   D --> E
   D --> G[cancelled]
-  E -.->|reprogrammed| A
-  H[reprogrammed] --> A
+  E -.-> H[reprogrammed]
+  H --> A
 ```
 
 The primary happy-path route is:

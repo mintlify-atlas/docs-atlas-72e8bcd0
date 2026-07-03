@@ -1,5 +1,5 @@
 ---
-title: "Cart and Checkout Flow in SansiStore"
+title: "SansiStore Shopping Cart and Checkout Flow for Buyers"
 sidebarTitle: "Cart & Checkout"
 description: "SansiStore's cart stores items per user in Firestore, supporting quantity changes and multi-item checkout with delivery location selection."
 ---
@@ -161,13 +161,13 @@ interface CreateOrderParams {
 }
 
 interface CreateOrderResult {
-  orderId: string;      // UUID v7 + "_" + 6-char z-base-32 label
+  orderId: string;      // UUID v4 + "_" + 6-char z-base-32 label
   orderSecret: string;  // 4-digit PIN for anonymous order lookup
   paymentCode: string;  // same as orderId; used as payments doc ID
 }
 ```
 
-The batch performs three types of writes atomically:
+The batch performs four types of writes atomically:
 
 1. **`orders/{orderId}`** — the order document (see field reference below)
 2. **`orders/{orderId}/orderItems/{itemId}`** — one document per included cart item
@@ -199,9 +199,10 @@ The batch performs three types of writes atomically:
 
 ## Order ID Format
 
-Order IDs are generated as `{uuidv7}_{zBase32Label}`:
+Order IDs are generated as `{uuidv4}_{zBase32Label}`:
 
 ```ts
+// Note: uuidv7 is a local alias for UUID v4 (`import { v4 as uuidv7 } from 'uuid'`)
 // Example: "019e74a5-808a-7321-9127-281f098b2d8e_3dg-zjs"
 export function generateOrderId(): string {
   return `${uuidv7()}_${generateZBase32Label()}`;
@@ -256,7 +257,7 @@ The `secret` field is a 4-digit shuffled PIN generated client-side, used to allo
 
 Cart behavior is covered by Playwright tests in `tests/cart/cart.spec.ts`:
 
-```
+```text
 Cart - Carrito
   ✓ should display cart items when user is authenticated
       — shows "Leche PIL Natural 900 ml" at Bs 9.70/u

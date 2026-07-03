@@ -1,5 +1,5 @@
 ---
-title: "Inventory Management for SansiStore Operators"
+title: "SansiStore Inventory Module: Stock Management for Operators"
 sidebarTitle: "Overview"
 description: "Inventory operators manage product stock levels, track entries and exits, and monitor low-stock alerts using SansiStore's inventory module."
 ---
@@ -24,7 +24,7 @@ The module is accessible at `/inventory` and contains six sub-pages, each focuse
     Paginated log of all `inventoryMovements` documents ordered by `createdAt` descending. Each row shows product, movement type, reason, operator name, and quantity delta. Tie-breaking uses the `sequence` field for same-millisecond batch writes.
   </Card>
   <Card title="Pedidos con fallos" icon="package-x" href="https://sansistore-umss.vercel.app/inventory/incidents">
-    Lists orders whose status is `NO ENTREGADO` or `CANCELADO`. Operators can restore reserved stock back to available in a single Firestore transaction, which also records an ENTRADA movement and sets `stockRestored: true` on the order.
+    Lists orders whose status is `NO ENTREGADO` or `CANCELADO`. Operators can release reserved stock by decrementing `stockReserved` in a single Firestore transaction, which also records an ENTRADA movement for audit purposes and sets `stockRestored: true` on the order.
   </Card>
   <Card title="Mis empaques" icon="package-search" href="https://sansistore-umss.vercel.app/inventory/packaging">
     Tracks order dispatch and warehouse handover. Operators prepare packages for orders and record the physical handover to the courier before pickup.
@@ -45,7 +45,7 @@ Each product has a corresponding document in the `inventory` collection, keyed b
 | `updatedAt` | `Timestamp` | Last time any inventory field was modified |
 
 <Note>
-  `stockAvailable` is always derived as `stockTotal − stockReserved`. When `stockAvailable` drops at or below `minStock`, the dashboard highlights the product row and a `StockAlertToast` is shown to the operator. This threshold is configurable per product.
+  `stockAvailable` and `stockTotal` are updated together by `StockMovementForm` on every ENTRADA or SALIDA batch write (both fields are incremented or decremented by the same quantity). `stockReserved` is managed separately by the order and fulfillment services. When `stockAvailable` drops at or below `minStock`, the dashboard highlights the product row and a `StockAlertToast` is shown to the operator. This threshold is configurable per product.
 </Note>
 
 ## Stock replenishment flow

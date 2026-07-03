@@ -1,5 +1,5 @@
 ---
-title: "Save Products to Favorites in SansiStore"
+title: "Save and Manage Your Favorite Products in SansiStore"
 sidebarTitle: "Favorites"
 description: "Authenticated buyers can save products to a favorites list stored in Firestore, making it easy to revisit and add items to the cart."
 ---
@@ -218,8 +218,7 @@ query(
   <Tab title="Guest User">
     Favorites are stored in `localStorage` under the key `sansistore_favorites` as a JSON array of `FavoriteItem` objects. All toggle operations are purely local. The `/favoritos` page works fully for guests.
 
-    ```ts
-    // localStorage structure
+    ```json
     [
       { "productId": "leche-pil-natural-900-ml", "createdAt": 1751500000000 },
       { "productId": "detergente-ola-5l", "createdAt": 1751499000000 }
@@ -249,7 +248,7 @@ From the `<FeaturedProducts>` perspective, `favoritesOnly` is purely a filter pr
 
 Favorites behavior is covered by Playwright tests in `tests/favorites/favorites.spec.ts`:
 
-```
+```text
 Favorite products
   ✓ allows anonymous users to add and persist a favorite product
       — heart button aria-pressed="false" → click → localStorage has 1 item

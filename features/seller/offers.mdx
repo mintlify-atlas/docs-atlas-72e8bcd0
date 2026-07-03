@@ -1,5 +1,5 @@
 ---
-title: "Manage Product Offers and Discounts as a Seller"
+title: "Seller Product Offers and Discount Management in SansiStore"
 sidebarTitle: "Offers"
 description: "Sellers can activate promotional offers on products by setting a discount percentage, displayed alongside the original price across the SansiStore catalog."
 ---
@@ -50,20 +50,25 @@ export const createOfferService = async (
   data: OfferData,
   originalPrice: number,
 ) => {
-  // 1. Write to the `offers` collection
-  const docRef = await addDoc(collection(db, 'offers'), {
-    productId: data.productId,
-    discount: data.discount,
-    startDate: data.startDate,
-    endDate: data.endDate,
-    status: data.status,
-    createdAt: serverTimestamp(),
-  });
+  try {
+    // 1. Write to the `offers` collection
+    const docRef = await addDoc(collection(db, 'offers'), {
+      productId: data.productId,
+      discount: data.discount,
+      startDate: data.startDate,
+      endDate: data.endDate,
+      status: data.status,
+      createdAt: serverTimestamp(),
+    });
 
-  // 2. Update the product with computed offerPrice
-  await updateProductWithOffer(data.productId, originalPrice, data.discount);
+    // 2. Update the product with computed offerPrice
+    await updateProductWithOffer(data.productId, originalPrice, data.discount);
 
-  return { success: true, id: docRef.id };
+    return { success: true, id: docRef.id };
+  } catch (error) {
+    console.error('Error al crear la oferta:', error);
+    return { success: false, error };
+  }
 };
 ```
 

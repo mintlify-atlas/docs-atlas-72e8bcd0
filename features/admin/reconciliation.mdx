@@ -1,5 +1,5 @@
 ---
-title: "Payment Reconciliation and Audit in SansiStore"
+title: "Payment Reconciliation and Audit in SansiStore Admin"
 sidebarTitle: "Reconciliation"
 description: "Admins reconcile courier cash collections against expected order totals, verify payments, and close courier sessions in SansiStore."
 ---
@@ -16,7 +16,7 @@ Only **delivered orders** are included in reconciliation. An order is considered
 |------------|-------|-----------|
 | `missing-payment` | Sin pago registrado | No `payments` document found for the order |
 | `pending-payment` | Pago no cobrado | Payment exists but status is not in the collected set |
-| `amount-mismatch` | Monto diferente | Payment collected but `order.total - payment.amount > 0.01` |
+| `amount-mismatch` | Monto diferente | Payment collected but `Math.abs(order.total - payment.amount) > 0.01` |
 
 **Collected payment statuses** (case/accent-insensitive): `cobrado`, `pagado`, `paid`, `verified`, `verificado`, `validado`.
 
@@ -113,7 +113,7 @@ Every payment collection event — regardless of whether it was made by a seller
 | `amount` | `number` | Amount collected |
 | `paymentMethod` | `PaymentMethod` | One of `EFECTIVO`, `QR`, `TRANSFERENCIA`, `TARJETA` |
 | `status` | `PaymentStatus` | `PENDIENTE`, `VERIFICADO`, or `RECHAZADO` |
-| `timestamp` | `Timestamp` | Server-side Firestore timestamp |
+| `timestamp` | `Date` | Server-side Firestore timestamp |
 
 <Warning>
   `paymentActivityLogs` is a write-once collection. Firestore security rules set `allow update: if false` and `allow delete: if false` on these documents. Only admins can read the collection. New entries must pass schema validation; partial or malformed writes are rejected. Never attempt to modify or delete an existing audit log entry — treat it as an immutable ledger.
